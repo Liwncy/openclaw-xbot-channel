@@ -150,7 +150,7 @@ export async function dispatchXbotInbound(args: {
     replyToMessageId: parsed.messageId,
   };
 
-  await inboundRuntime.run({
+  const runResult = (await inboundRuntime.run({
     channel: CHANNEL_ID,
     accountId: parsed.accountId,
     raw: parsed,
@@ -166,6 +166,7 @@ export async function dispatchXbotInbound(args: {
       resolveTurn: () => ({
         channel: CHANNEL_ID,
         accountId: parsed.accountId,
+        agentId,
         routeSessionKey: sessionKey,
         storePath,
         ctxPayload,
@@ -177,7 +178,11 @@ export async function dispatchXbotInbound(args: {
             accountId: parsed.accountId,
             sessionKey,
           },
-          onRecordError: () => {},
+          onRecordError: (err: unknown) => {
+            args.api.logger?.warn?.(
+              `[xbot] inbound record session failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          },
         },
         runDispatch: async () =>
           dispatchOpenClawReplyWithBufferedBlockDispatcher(api, {
@@ -187,7 +192,11 @@ export async function dispatchXbotInbound(args: {
               deliver: async (payload, info) => {
                 await deliverXbotReply({ cfg, wechatApiBaseUrl, replyTarget }, payload, info);
               },
-              onError: () => {},
+              onError: (err: unknown) => {
+                args.api.logger?.error?.(
+                  `[xbot] outbound reply failed: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              },
             },
             replyOptions: {
               disableBlockStreaming: false,
@@ -195,7 +204,13 @@ export async function dispatchXbotInbound(args: {
           }),
       }),
     },
-  });
+  })) as { dispatched?: boolean; admission?: { kind?: string; reason?: string } } | undefined;
 
-  return { dispatched: true, sessionKey };
+  const dispatched = runResult?.dispatched === true;
+  const admissionReason = runResult?.admission?.reason;
+  return {
+    dispatched,
+    sessionKey,
+    reason: dispatched ? undefined : admissionReason || runResult?.admission?.kind || 'not-dispatched',
+  };
 }

@@ -43,8 +43,10 @@ function detectBotMention(args: {
 }): boolean {
   if (args.explicit === true) return true;
   const botId = resolveBotWechatId(args.cfg);
+  const botName = asString(args.cfg?.channels?.xbot?.botWechatName).trim();
   if (botId && args.mentions.includes(botId)) return true;
   if (botId && args.content.includes(`@${botId}`)) return true;
+  if (botName && args.content.includes(`@${botName}`)) return true;
   return false;
 }
 
