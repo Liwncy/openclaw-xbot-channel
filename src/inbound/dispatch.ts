@@ -204,13 +204,34 @@ export async function dispatchXbotInbound(args: {
           }),
       }),
     },
-  })) as { dispatched?: boolean; admission?: { kind?: string; reason?: string } } | undefined;
+  })) as {
+    dispatched?: boolean;
+    admission?: { kind?: string; reason?: string };
+    dispatchResult?: {
+      counts?: { tool?: number; block?: number; final?: number };
+      observedReplyDelivery?: boolean;
+      queuedFinal?: boolean;
+    };
+  } | undefined;
 
-  const dispatched = runResult?.dispatched === true;
+  const agentDispatched = runResult?.dispatched === true;
+  const dispatchResult = runResult?.dispatchResult;
+  const counts = dispatchResult?.counts;
+  const hasVisibleReply =
+    dispatchResult?.observedReplyDelivery === true
+    || dispatchResult?.queuedFinal === true
+    || (counts?.tool ?? 0) > 0
+    || (counts?.block ?? 0) > 0
+    || (counts?.final ?? 0) > 0;
+  const dispatched = agentDispatched && hasVisibleReply;
   const admissionReason = runResult?.admission?.reason;
   return {
     dispatched,
     sessionKey,
-    reason: dispatched ? undefined : admissionReason || runResult?.admission?.kind || 'not-dispatched',
+    reason: dispatched
+      ? undefined
+      : !agentDispatched
+        ? admissionReason || runResult?.admission?.kind || 'not-dispatched'
+        : 'agent-no-reply',
   };
 }
