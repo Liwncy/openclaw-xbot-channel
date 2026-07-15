@@ -102,20 +102,45 @@ export async function dispatchXbotInbound(args: {
       name: parsed.senderName,
       username: parsed.senderName,
     },
-    peer: parsed.peer,
-    chatType: parsed.peer.kind === 'group' ? 'group' : 'direct',
-    body,
-    Body: body,
-    BodyForAgent: body,
-    CommandBody: parsed.rawBody,
-    rawBody: parsed.rawBody,
-    To: canonicalTo,
-    OriginatingChannel: CHANNEL_ID,
-    OriginatingTo: canonicalTo,
-    WasMentioned: parsed.botMentioned,
-    Mentioned: parsed.botMentioned,
-    SessionKey: sessionKey,
-    AgentId: agentId,
+    conversation: {
+      kind: parsed.peer.kind,
+      id: parsed.peer.id,
+      label: canonicalTo,
+      routePeer: {
+        kind: parsed.peer.kind,
+        id: parsed.peer.id,
+      },
+    },
+    route: {
+      agentId,
+      accountId: parsed.accountId,
+      routeSessionKey: sessionKey,
+      dispatchSessionKey: sessionKey,
+      mainSessionKey: resolvedRoute.mainSessionKey,
+    },
+    reply: {
+      to: canonicalTo,
+      originatingTo: canonicalTo,
+      replyToId: parsed.messageId,
+    },
+    message: {
+      inboundEventKind: 'user_request',
+      body,
+      rawBody: parsed.rawBody,
+      bodyForAgent: parsed.rawBody,
+      commandBody: parsed.rawBody,
+    },
+    access: {
+      mentions: {
+        canDetectMention: true,
+        wasMentioned: parsed.botMentioned,
+        effectiveWasMentioned: parsed.botMentioned,
+      },
+    },
+    extra: {
+      OriginatingChannel: CHANNEL_ID,
+      OriginatingTo: canonicalTo,
+    },
   })) as OpenClawChannelRuntimeContext;
 
   const replyTarget: XbotReplyTarget = {
