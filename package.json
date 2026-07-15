@@ -1,0 +1,45 @@
+{
+  "name": "openclaw-xbot-channel",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "license": "MIT",
+  "description": "OpenClaw channel plugin for xchatbot (WeChat via xbot gateway)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lwc--/openclaw-xbot-channel.git"
+  },
+  "files": [
+    "index.ts",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE",
+    "src/**/*.ts",
+    "dist/**/*.js"
+  ],
+  "scripts": {
+    "build": "npx -y esbuild@0.28.0 index.ts --bundle --platform=node --format=esm --target=node22 --packages=external --outfile=dist/index.js",
+    "typecheck": "node ./node_modules/typescript/lib/tsc.js -p tsconfig.typecheck.json"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.27"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.2",
+    "esbuild": "^0.28.0",
+    "openclaw": ">=2026.5.27",
+    "typescript": "^6.0.3"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.5.27",
+      "minGatewayVersion": "2026.5.27"
+    },
+    "runtimeExtensions": [
+      "./dist/index.js"
+    ]
+  }
+}
