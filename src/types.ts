@@ -9,12 +9,25 @@ export type XbotChannelConfigSection = XbotChannelPolicyConfig & {
   wechatApiBaseUrl?: string;
   botWechatId?: string;
   botWechatName?: string;
+  /** 是否把中间块（如调技能前的说明）发到微信，默认 true */
+  blockStreaming?: boolean;
+  /** 是否把 tool 结果也转发到微信，默认 false */
+  allowTool?: boolean;
   accounts?: Record<string, XbotAccountConfig | undefined>;
 };
 
 export type XbotChannelConfigRoot = {
   channels?: {
     xbot?: XbotChannelConfigSection;
+  };
+  agents?: {
+    defaults?: {
+      blockStreamingDefault?: unknown;
+      blockStreamingBreak?: string;
+      blockStreamingChunk?: { minChars?: number; maxChars?: number };
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
   };
   session?: {
     dmScope?: string;

@@ -38,8 +38,25 @@
       "requireMention": {
         "type": "boolean",
         "default": true,
-        "description": "Group messages must @mention the bot before dispatch"
+        "description": "Legacy: when groupReplyMode unset, true→mention mode, false→all"
       },
+      "groupReplyMode": {
+        "type": "string",
+        "enum": ["mention", "all"],
+        "description": "mention: accumulate all group msgs, reply only on @/name; all: reply every msg"
+      },
+      "historyLimit": {
+        "type": "number",
+        "default": 50,
+        "description": "Pending group history window size"
+      },
+      "historyForce": {
+        "type": "boolean",
+        "default": true,
+        "description": "When pending window is full, silently flush into session (NO_REPLY, no WeChat send)"
+      },
+      "blockStreaming": { "type": "boolean" },
+      "allowTool": { "type": "boolean" },
       "accounts": {
         "type": "object",
         "additionalProperties": {
@@ -80,6 +97,14 @@
             "items": { "type": "string" }
           },
           "requireMention": { "type": "boolean" },
+          "groupReplyMode": {
+            "type": "string",
+            "enum": ["mention", "all"]
+          },
+          "historyLimit": { "type": "number" },
+          "historyForce": { "type": "boolean" },
+          "blockStreaming": { "type": "boolean" },
+          "allowTool": { "type": "boolean" },
           "accounts": {
             "type": "object",
             "additionalProperties": {

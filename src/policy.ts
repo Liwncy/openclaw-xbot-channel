@@ -8,6 +8,12 @@ export type XbotChannelPolicyConfig = {
   allowFrom?: unknown;
   groupAllowFrom?: unknown;
   requireMention?: unknown;
+  /** mention=攒历史仅点名回复；all=每条都回。未设时跟 requireMention 走。 */
+  groupReplyMode?: unknown;
+  /** 群 pending 历史条数上限，默认 50 */
+  historyLimit?: unknown;
+  /** 窗满是否静默 flush 进 session，默认 true */
+  historyForce?: unknown;
 };
 
 function asString(v: unknown, fallback = ''): string {

@@ -105,6 +105,7 @@ export async function dispatchOpenClawReplyWithBufferedBlockDispatcher(
     };
     replyOptions?: {
       disableBlockStreaming?: boolean;
+      shouldEmitToolResult?: () => boolean;
     };
   },
 ): Promise<unknown> {

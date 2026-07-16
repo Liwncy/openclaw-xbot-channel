@@ -44,6 +44,9 @@ openclaw gateway restart
       "groupPolicy": "allowlist",
       "groupAllowFrom": ["12345678@chatroom"],
       "requireMention": true,
+      "groupReplyMode": "mention",
+      "historyLimit": 50,
+      "historyForce": true,
       "accounts": {
         "Primary": {
           "enabled": true,
@@ -61,7 +64,33 @@ openclaw gateway restart
 | `botWechatId` | 机器人 wxid，用于群聊 @ 检测 |
 | `dmPolicy` | 私聊：`open` / `allowlist` / `disabled` |
 | `groupPolicy` | 群聊：`open` / `allowlist` / `disabled` |
-| `requireMention` | 群聊是否必须 @ 机器人才分发（默认 `true`） |
+| `requireMention` | 兼容字段；未设 `groupReplyMode` 时：`true`→`mention`，`false`→`all` |
+| `groupReplyMode` | `mention`（默认）：群消息都攒历史，仅点名/提到昵称才回复；`all`：每条都回复 |
+| `historyLimit` | 群 pending 历史条数上限（默认 `50`） |
+| `historyForce` | 窗满是否静默 flush 进 session（默认 `true`）；`false` 则只滑动丢旧消息 |
+| `blockStreaming` | 是否把中间回复发到微信（如调技能前的说明），默认 `true` |
+| `allowTool` | 是否把 tool 结果也发到微信，默认 `false` |
+
+### 群聊行为（对齐 BNCR）
+
+- **`mention`**：白名单群里每条消息都会进插件；未点名 → 只写入内存 pending（带昵称 + wxid）；点名 → 把 pending 拼进上下文再跑 Agent，然后清空窗口。
+- **`all`**：每条都跑 Agent，不攒 pending。
+- **`historyForce`**（默认开）：pending 满 `historyLimit` 时，自动跑一轮 Agent 把这批写进 session，要求输出 `NO_REPLY`，**微信不发消息**；然后清空窗口继续攒。关掉则只丢最老消息。
+- Agent 看到的正文类似：`群成员「张三(wxid_xxx)」说：…`，大群能区分人。
+
+注意：pending 是 **Gateway 进程内存**里的短窗（默认 50），重启会丢；静默 flush 会把批次沉进 OpenClaw session。当天全量统计仍靠 xchatbot D1 `chat_log`。
+
+默认会开启 **block streaming**（`text_end` 断点、`minChars: 1`），调 Skill/工具前的说明句会先发一条微信，最终答案再发一条。若要关闭中间消息、只发最终回复：
+
+```json
+{
+  "channels": {
+    "xbot": {
+      "blockStreaming": false
+    }
+  }
+}
+```
 
 ## Gateway 方法
 

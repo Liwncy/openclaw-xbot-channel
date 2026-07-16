@@ -26,6 +26,14 @@ export const XbotConfigSchema = {
       items: { type: 'string' },
     },
     requireMention: { type: 'boolean' },
+    groupReplyMode: {
+      type: 'string',
+      enum: ['mention', 'all'],
+    },
+    historyLimit: { type: 'number' },
+    historyForce: { type: 'boolean' },
+    blockStreaming: { type: 'boolean' },
+    allowTool: { type: 'boolean' },
     accounts: {
       type: 'object',
       additionalProperties: {

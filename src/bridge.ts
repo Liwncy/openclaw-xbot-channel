@@ -9,6 +9,7 @@ import {
 } from './accounts.ts';
 import { CHANNEL_ID } from './constants.ts';
 import { dispatchXbotInbound } from './inbound/dispatch.ts';
+import type { XbotGroupHistoryMap } from './inbound/group-history.ts';
 import { parseXbotInboundParams } from './inbound/parse.ts';
 import { getOpenClawRuntimeConfig } from './openclaw/config.ts';
 import { rememberReplyTarget, resolveReplyTargetBySession, sendXbotMedia, sendXbotText } from './outbound/send.ts';
@@ -28,6 +29,8 @@ export class XbotBridge {
   private readonly bridgeId = `xbot-${process.pid}-${Date.now().toString(36)}`;
   private readonly connections = new Map<string, XbotConnection>();
   private readonly replyTargets = new Map<string, XbotReplyTarget>();
+  /** 群聊 pending 历史（未点名时攒着，点名触发时注入上下文） */
+  private readonly groupHistories: XbotGroupHistoryMap = new Map();
   private runtimeWechatApiBaseUrl = '';
 
   constructor(api: OpenClawPluginApi) {
@@ -111,6 +114,7 @@ export class XbotBridge {
         cfg,
         parsed,
         wechatApiBaseUrl,
+        groupHistories: this.groupHistories,
         onIgnored: () => {},
       });
 
@@ -127,6 +131,7 @@ export class XbotBridge {
         ok: true,
         accepted: true,
         dispatched: result.dispatched,
+        accumulated: result.accumulated === true,
         reason: result.reason || null,
         accountId: parsed.accountId,
         sessionKey: result.sessionKey || null,
