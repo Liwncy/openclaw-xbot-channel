@@ -7,6 +7,8 @@ export const XbotConfigSchema = {
   properties: {
     enabled: { type: 'boolean' },
     wechatApiBaseUrl: { type: 'string' },
+    chatLogApiBaseUrl: { type: 'string' },
+    chatLogAdminToken: { type: 'string' },
     botWechatId: { type: 'string' },
     botWechatName: { type: 'string' },
     dmPolicy: {

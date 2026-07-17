@@ -7,6 +7,8 @@ export type XbotAccountConfig = {
 
 export type XbotChannelConfigSection = XbotChannelPolicyConfig & {
   wechatApiBaseUrl?: string;
+  chatLogApiBaseUrl?: string;
+  chatLogAdminToken?: string;
   botWechatId?: string;
   botWechatName?: string;
   /** 是否把中间块（如调技能前的说明）发到微信，默认 true */

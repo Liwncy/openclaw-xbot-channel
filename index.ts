@@ -1,5 +1,6 @@
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk/core';
 import { getXbotBridge } from './src/bridge.ts';
+import { registerXbotChatHistoryTool } from './src/chat-log-tool.ts';
 import { createXbotChannelPlugin } from './src/channel-plugin.ts';
 import { XbotConfigSchema } from './src/config-schema.ts';
 import { GATEWAY_METHODS } from './src/constants.ts';
@@ -40,6 +41,8 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     const runtime = getGatewayRuntime();
     const bridge = getCurrentBridge(api);
+
+    registerXbotChatHistoryTool(api);
 
     if (!runtime.serviceRegistered) {
       api.registerService({
