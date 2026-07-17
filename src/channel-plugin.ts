@@ -18,7 +18,7 @@ import { CHANNEL_ID, DEFAULT_ACCOUNT_ID, GATEWAY_METHODS } from './constants.ts'
 import { XbotConfigSchema } from './config-schema.ts';
 import { XBOT_CHANNEL_META } from './meta.ts';
 import { resolveXbotChannelPolicy } from './policy.ts';
-import { parseExplicitTarget } from './targets.ts';
+import { buildExplicitTarget, parseExplicitTarget } from './targets.ts';
 import type { XbotChannelConfigRoot } from './types.ts';
 
 function asString(v: unknown, fallback = ''): string {
@@ -154,11 +154,37 @@ export function createXbotChannelPlugin(getBridge: () => XbotBridge) {
       normalizeAccountId(accountId),
     resolveRouteBySession: (raw: string, accountId: string) =>
       getBridge().resolveRouteBySession(raw, accountId),
-    normalizeTarget: (raw: string) => asString(raw).trim() || undefined,
+    normalizeTarget: (raw: string) => {
+      const input = asString(raw).trim();
+      if (!input) return undefined;
+      const parsed = parseExplicitTarget(input);
+      return parsed ? buildExplicitTarget(parsed.route) : input;
+    },
     formatTargetDisplay: ({ target }: { target?: string | { to?: string } }) => {
       const raw = typeof target === 'string' ? target : asString(target?.to);
       const parsed = parseExplicitTarget(raw);
       return parsed?.route.to || raw;
+    },
+    targetResolver: {
+      looksLikeId: (raw: string, normalized?: string) => {
+        const input = asString(raw).trim();
+        const normalizedInput = asString(normalized).trim();
+        return Boolean(
+          parseExplicitTarget(input)
+          || (normalizedInput && parseExplicitTarget(normalizedInput)),
+        );
+      },
+      hint: '<group:roomId@chatroom|user:wxid_xxx|roomId@chatroom|wxid_xxx>',
+      resolveTarget: async ({ input, normalized }: { input: string; normalized?: string }) => {
+        const parsed = parseExplicitTarget(asString(normalized).trim() || asString(input).trim());
+        if (!parsed) return null;
+        return {
+          to: buildExplicitTarget(parsed.route),
+          kind: parsed.route.kind === 'group' ? 'group' : 'user',
+          display: parsed.route.to,
+          source: 'normalized',
+        };
+      },
     },
   };
 
@@ -187,7 +213,17 @@ export function createXbotChannelPlugin(getBridge: () => XbotBridge) {
       const input = params || {};
       const to = asString(input.to || input.target).trim();
       const message = asString(input.message || input.text).trim();
-      const mediaUrl = asString(input.media || input.mediaUrl).trim();
+      const attachments = Array.isArray(input.attachments) ? input.attachments : [];
+      const firstAttachment = attachments[0] && typeof attachments[0] === 'object'
+        ? attachments[0] as Record<string, unknown>
+        : null;
+      const mediaUrl = asString(
+        input.media
+        || input.mediaUrl
+        || firstAttachment?.media
+        || firstAttachment?.mediaUrl
+        || firstAttachment?.url,
+      ).trim();
       const bridge = getBridge();
       const result = mediaUrl
         ? await bridge.channelSendMedia({

@@ -70,6 +70,11 @@ export async function dispatchXbotInbound(args: {
   wechatApiBaseUrl: string;
   groupHistories: XbotGroupHistoryMap;
   onIgnored?: (reason: string) => void;
+  resolvedRouteOverride?: {
+    sessionKey?: string;
+    mainSessionKey?: string;
+    agentId?: string;
+  };
 }): Promise<XbotDispatchResult> {
   const { api, cfg, parsed, wechatApiBaseUrl, groupHistories } = args;
   const channelCfg = cfg?.channels?.[CHANNEL_ID] || {};
@@ -81,7 +86,7 @@ export async function dispatchXbotInbound(args: {
     return { dispatched: false, reason: turn.reason };
   }
 
-  const resolvedRoute = resolveOpenClawAgentRoute(api, {
+  const resolvedRoute = args.resolvedRouteOverride || resolveOpenClawAgentRoute(api, {
     cfg,
     channel: CHANNEL_ID,
     accountId: parsed.accountId,
@@ -115,11 +120,6 @@ export async function dispatchXbotInbound(args: {
 
     if (overflow && turn.historyForce) {
       pendingHistoryEntries = readXbotPendingGroupHistorySnapshot({
-        historyMap: groupHistories,
-        parsed,
-        historyLimit: turn.historyLimit,
-      });
-      clearXbotPendingGroupHistory({
         historyMap: groupHistories,
         parsed,
         historyLimit: turn.historyLimit,
@@ -338,12 +338,7 @@ export async function dispatchXbotInbound(args: {
     };
   } | undefined;
 
-  if (
-    !silentHistoryFlush
-    && pendingHistoryEntries.length === 0
-    && shouldDispatch
-    && parsed.peer.kind === 'group'
-  ) {
+  if (shouldDispatch && parsed.peer.kind === 'group') {
     clearXbotPendingGroupHistory({
       historyMap: groupHistories,
       parsed,

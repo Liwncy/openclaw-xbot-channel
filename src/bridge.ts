@@ -12,8 +12,10 @@ import { dispatchXbotInbound } from './inbound/dispatch.ts';
 import type { XbotGroupHistoryMap } from './inbound/group-history.ts';
 import { parseXbotInboundParams } from './inbound/parse.ts';
 import { getOpenClawRuntimeConfig } from './openclaw/config.ts';
+import { resolveOpenClawAgentRoute } from './openclaw/runtime.ts';
 import { rememberReplyTarget, resolveReplyTargetBySession, sendXbotMedia, sendXbotText } from './outbound/send.ts';
 import { resolveXbotChannelPolicy } from './policy.ts';
+import { callGatewayFromCli } from 'openclaw/plugin-sdk/gateway-runtime';
 import type { XbotChannelConfigRoot, XbotConnection, XbotReplyTarget } from './types.ts';
 
 function asString(v: unknown, fallback = ''): string {
@@ -24,11 +26,39 @@ function asString(v: unknown, fallback = ''): string {
 
 type GatewayContext = GatewayRequestHandlerOptions;
 
+function isContextOverflowError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /context is too large|auto-compaction/i.test(message);
+}
+
+function buildRotatedSessionKey(baseSessionKey: string): string {
+  return `${baseSessionKey}::ctx-${Date.now().toString(36)}`;
+}
+
+async function compactSessionViaGateway(args: {
+  sessionKey: string;
+  agentId?: string;
+}): Promise<boolean> {
+  const params = {
+    key: args.sessionKey,
+    ...(args.agentId ? { agentId: args.agentId } : {}),
+  };
+  const result = await callGatewayFromCli('sessions.compact', {
+    timeout: '180000',
+    expectFinal: true,
+  }, params, {
+    expectFinal: true,
+  });
+  return result?.ok === true && result?.compacted === true;
+}
+
 export class XbotBridge {
   private readonly api: OpenClawPluginApi;
   private readonly bridgeId = `xbot-${process.pid}-${Date.now().toString(36)}`;
   private readonly connections = new Map<string, XbotConnection>();
   private readonly replyTargets = new Map<string, XbotReplyTarget>();
+  /** base sessionKey -> rotated sessionKey，避免上下文撑爆后继续复用旧会话 */
+  private readonly sessionKeyOverrides = new Map<string, string>();
   /** 群聊 pending 历史（未点名时攒着，点名触发时注入上下文） */
   private readonly groupHistories: XbotGroupHistoryMap = new Map();
   private runtimeWechatApiBaseUrl = '';
@@ -109,14 +139,91 @@ export class XbotBridge {
     }
 
     try {
-      const result = await dispatchXbotInbound({
-        api: this.api,
+      const baseRoute = resolveOpenClawAgentRoute(this.api, {
         cfg,
-        parsed,
-        wechatApiBaseUrl,
-        groupHistories: this.groupHistories,
-        onIgnored: () => {},
+        channel: CHANNEL_ID,
+        accountId: parsed.accountId,
+        peer: parsed.peer,
       });
+      const baseSessionKey = asString(baseRoute.sessionKey).trim();
+      const appliedSessionKey = this.sessionKeyOverrides.get(baseSessionKey) || baseSessionKey;
+      const activeRoute = appliedSessionKey
+        ? { ...baseRoute, sessionKey: appliedSessionKey }
+        : baseRoute;
+
+      let result;
+      try {
+        result = await dispatchXbotInbound({
+          api: this.api,
+          cfg,
+          parsed,
+          wechatApiBaseUrl,
+          groupHistories: this.groupHistories,
+          onIgnored: () => {},
+          resolvedRouteOverride: activeRoute,
+        });
+      } catch (error) {
+        if (!baseSessionKey || !isContextOverflowError(error)) {
+          throw error;
+        }
+        const activeSessionKey = appliedSessionKey || baseSessionKey;
+        const activeAgentId = asString(activeRoute.agentId || baseRoute.agentId).trim() || undefined;
+        let compacted = false;
+        try {
+          this.api.logger?.warn?.(
+            `[xbot] context overflow on sessionKey=${activeSessionKey}, compact current session first`,
+          );
+          compacted = await compactSessionViaGateway({
+            sessionKey: activeSessionKey,
+            agentId: activeAgentId,
+          });
+        } catch (compactError) {
+          this.api.logger?.warn?.(
+            `[xbot] session compact failed for sessionKey=${activeSessionKey}: ${compactError instanceof Error ? compactError.message : String(compactError)}`,
+          );
+        }
+
+        if (compacted) {
+          try {
+            result = await dispatchXbotInbound({
+              api: this.api,
+              cfg,
+              parsed,
+              wechatApiBaseUrl,
+              groupHistories: this.groupHistories,
+              onIgnored: () => {},
+              resolvedRouteOverride: activeRoute,
+            });
+          } catch (retryError) {
+            if (!isContextOverflowError(retryError)) {
+              throw retryError;
+            }
+            this.api.logger?.warn?.(
+              `[xbot] context still overflow after compact sessionKey=${activeSessionKey}, rotate session`,
+            );
+          }
+        }
+
+        if (!result) {
+          const rotatedSessionKey = buildRotatedSessionKey(baseSessionKey);
+          this.sessionKeyOverrides.set(baseSessionKey, rotatedSessionKey);
+          this.api.logger?.warn?.(
+            `[xbot] rotate session fallback ${activeSessionKey} -> ${rotatedSessionKey}`,
+          );
+          result = await dispatchXbotInbound({
+            api: this.api,
+            cfg,
+            parsed,
+            wechatApiBaseUrl,
+            groupHistories: this.groupHistories,
+            onIgnored: () => {},
+            resolvedRouteOverride: {
+              ...baseRoute,
+              sessionKey: rotatedSessionKey,
+            },
+          });
+        }
+      }
 
       if (result.sessionKey) {
         rememberReplyTarget(this.replyTargets, result.sessionKey, {
