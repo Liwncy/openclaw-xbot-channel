@@ -65,6 +65,8 @@ export type ParsedXbotInbound = {
   timestamp: number;
   clientId?: string;
   connId?: string;
+  xchatbotApiBaseUrl?: string;
+  xchatbotAdminToken?: string;
 };
 
 export type XbotConnection = {
@@ -74,6 +76,8 @@ export type XbotConnection = {
   connectedAt: number;
   lastActivityAt: number;
   wechatApiBaseUrl?: string;
+  xchatbotApiBaseUrl?: string;
+  xchatbotAdminToken?: string;
 };
 
 export type XbotReplyTarget = {
@@ -81,4 +85,6 @@ export type XbotReplyTarget = {
   to: string;
   route: XbotRoute;
   replyToMessageId?: string;
+  xchatbotApiBaseUrl?: string;
+  xchatbotAdminToken?: string;
 };

@@ -87,6 +87,8 @@ export class XbotBridge {
     const clientId = asString(input.clientId).trim() || `client-${Date.now()}`;
     const connId = asString(input.connId).trim() || clientId;
     const wechatApiBaseUrl = asString(input.wechatApiBaseUrl).trim();
+    const xchatbotApiBaseUrl = asString(input.xchatbotApiBaseUrl).trim();
+    const xchatbotAdminToken = asString(input.xchatbotAdminToken).trim();
     if (wechatApiBaseUrl) this.runtimeWechatApiBaseUrl = wechatApiBaseUrl;
 
     const now = Date.now();
@@ -97,6 +99,8 @@ export class XbotBridge {
       connectedAt: now,
       lastActivityAt: now,
       wechatApiBaseUrl: wechatApiBaseUrl || undefined,
+      xchatbotApiBaseUrl: xchatbotApiBaseUrl || undefined,
+      xchatbotAdminToken: xchatbotAdminToken || undefined,
     });
 
     respond(true, {
@@ -226,11 +230,14 @@ export class XbotBridge {
       }
 
       if (result.sessionKey) {
+        const activeConnection = connId ? this.connections.get(connId) : undefined;
         rememberReplyTarget(this.replyTargets, result.sessionKey, {
           accountId: parsed.accountId,
           to: parsed.route.to,
           route: parsed.route,
           replyToMessageId: parsed.messageId,
+          xchatbotApiBaseUrl: parsed.xchatbotApiBaseUrl || activeConnection?.xchatbotApiBaseUrl,
+          xchatbotAdminToken: parsed.xchatbotAdminToken || activeConnection?.xchatbotAdminToken,
         });
       }
 

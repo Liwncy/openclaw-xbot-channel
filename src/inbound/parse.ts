@@ -136,5 +136,7 @@ export function parseXbotInboundParams(
     timestamp,
     clientId: asString(input.clientId).trim() || undefined,
     connId: asString(input.connId).trim() || undefined,
+    xchatbotApiBaseUrl: asString(input.xchatbotApiBaseUrl).trim() || undefined,
+    xchatbotAdminToken: asString(input.xchatbotAdminToken).trim() || undefined,
   };
 }

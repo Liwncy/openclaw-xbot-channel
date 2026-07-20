@@ -25,8 +25,7 @@ import {
 import { decideXbotInboundTurn } from './turn-decision.ts';
 import { resolveOutboundReceiver } from '../targets.ts';
 import type { ParsedXbotInbound, XbotChannelConfigRoot, XbotReplyTarget } from '../types.ts';
-import { recordOutboundChatLogIfConfigured } from '../chat-log-recorder.ts';
-import { sendWechatImageUrl, sendWechatText } from '../wechat-api.ts';
+import { sendViaXchatbotIfConfigured } from '../xchatbot-outbound.ts';
 
 export type XbotDeliverContext = {
   cfg: XbotChannelConfigRoot;
@@ -55,54 +54,19 @@ export async function deliverXbotReply(
 ): Promise<void> {
   const text = String(payload.text || '').trim();
   const mediaUrl = String(payload.mediaUrl || payload.mediaUrls?.[0] || '').trim();
-  const receiver = resolveOutboundReceiver(deliverCtx.replyTarget.route);
-  if (!receiver) throw new Error('outbound receiver is empty');
-
-  if (mediaUrl) {
-    const imageResult = await sendWechatImageUrl(deliverCtx.wechatApiBaseUrl, receiver, mediaUrl);
-    const imageReplyIndex = deliverCtx.allocateReplyIndex?.() ?? 0;
-    await recordOutboundChatLogIfConfigured({
-      cfg: deliverCtx.cfg,
-      replyTarget: deliverCtx.replyTarget,
-      reply: {
-        type: 'image',
-        mediaId: mediaUrl,
-        originalUrl: mediaUrl,
-      },
-      replyIndex: imageReplyIndex,
-      wechatResult: imageResult,
-      onWarn: deliverCtx.onWarn,
-    });
-    if (text) {
-      const textResult = await sendWechatText(deliverCtx.wechatApiBaseUrl, receiver, text);
-      const textReplyIndex = deliverCtx.allocateReplyIndex?.() ?? imageReplyIndex + 1;
-      await recordOutboundChatLogIfConfigured({
-        cfg: deliverCtx.cfg,
-        replyTarget: deliverCtx.replyTarget,
-        reply: {
-          type: 'text',
-          content: text,
-        },
-        replyIndex: textReplyIndex,
-        wechatResult: textResult,
-        onWarn: deliverCtx.onWarn,
-      });
-    }
-    return;
-  }
-  if (!text) return;
-  const textResult = await sendWechatText(deliverCtx.wechatApiBaseUrl, receiver, text);
-  await recordOutboundChatLogIfConfigured({
+  const outboundReplies = [
+    ...(mediaUrl ? [{ type: 'image' as const, mediaId: mediaUrl, originalUrl: mediaUrl }] : []),
+    ...(text ? [{ type: 'text' as const, content: text }] : []),
+  ];
+  const relayedByXchatbot = await sendViaXchatbotIfConfigured({
     cfg: deliverCtx.cfg,
     replyTarget: deliverCtx.replyTarget,
-    reply: {
-      type: 'text',
-      content: text,
-    },
-    replyIndex: deliverCtx.allocateReplyIndex?.() ?? 0,
-    wechatResult: textResult,
+    replies: outboundReplies,
     onWarn: deliverCtx.onWarn,
   });
+  if (!relayedByXchatbot) {
+    throw new Error('xchatbot outbound relay is not configured or failed');
+  }
 }
 
 export async function dispatchXbotInbound(args: {
