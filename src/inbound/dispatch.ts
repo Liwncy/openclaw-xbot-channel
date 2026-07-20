@@ -25,12 +25,15 @@ import {
 import { decideXbotInboundTurn } from './turn-decision.ts';
 import { resolveOutboundReceiver } from '../targets.ts';
 import type { ParsedXbotInbound, XbotChannelConfigRoot, XbotReplyTarget } from '../types.ts';
+import { recordOutboundChatLogIfConfigured } from '../chat-log-recorder.ts';
 import { sendWechatImageUrl, sendWechatText } from '../wechat-api.ts';
 
 export type XbotDeliverContext = {
   cfg: XbotChannelConfigRoot;
   wechatApiBaseUrl: string;
   replyTarget: XbotReplyTarget;
+  allocateReplyIndex?: () => number;
+  onWarn?: (message: string) => void;
 };
 
 export type XbotDispatchResult = {
@@ -56,11 +59,50 @@ export async function deliverXbotReply(
   if (!receiver) throw new Error('outbound receiver is empty');
 
   if (mediaUrl) {
-    await sendWechatImageUrl(deliverCtx.wechatApiBaseUrl, receiver, mediaUrl, text || undefined);
+    const imageResult = await sendWechatImageUrl(deliverCtx.wechatApiBaseUrl, receiver, mediaUrl);
+    const imageReplyIndex = deliverCtx.allocateReplyIndex?.() ?? 0;
+    await recordOutboundChatLogIfConfigured({
+      cfg: deliverCtx.cfg,
+      replyTarget: deliverCtx.replyTarget,
+      reply: {
+        type: 'image',
+        mediaId: mediaUrl,
+        originalUrl: mediaUrl,
+      },
+      replyIndex: imageReplyIndex,
+      wechatResult: imageResult,
+      onWarn: deliverCtx.onWarn,
+    });
+    if (text) {
+      const textResult = await sendWechatText(deliverCtx.wechatApiBaseUrl, receiver, text);
+      const textReplyIndex = deliverCtx.allocateReplyIndex?.() ?? imageReplyIndex + 1;
+      await recordOutboundChatLogIfConfigured({
+        cfg: deliverCtx.cfg,
+        replyTarget: deliverCtx.replyTarget,
+        reply: {
+          type: 'text',
+          content: text,
+        },
+        replyIndex: textReplyIndex,
+        wechatResult: textResult,
+        onWarn: deliverCtx.onWarn,
+      });
+    }
     return;
   }
   if (!text) return;
-  await sendWechatText(deliverCtx.wechatApiBaseUrl, receiver, text);
+  const textResult = await sendWechatText(deliverCtx.wechatApiBaseUrl, receiver, text);
+  await recordOutboundChatLogIfConfigured({
+    cfg: deliverCtx.cfg,
+    replyTarget: deliverCtx.replyTarget,
+    reply: {
+      type: 'text',
+      content: text,
+    },
+    replyIndex: deliverCtx.allocateReplyIndex?.() ?? 0,
+    wechatResult: textResult,
+    onWarn: deliverCtx.onWarn,
+  });
 }
 
 export async function dispatchXbotInbound(args: {
@@ -166,6 +208,7 @@ export async function dispatchXbotInbound(args: {
     ? HISTORY_FLUSH_SENDER_NAME
     : parsed.senderName;
   const effectiveRawBody = silentHistoryFlush ? HISTORY_FLUSH_RAW_BODY : parsed.rawBody;
+  let outboundReplyIndex = 0;
 
   const agentVisibleBody = silentHistoryFlush
     ? buildXbotAgentBodyWithHistory({
@@ -313,7 +356,15 @@ export async function dispatchXbotInbound(args: {
                   return;
                 }
 
-                await deliverXbotReply({ cfg, wechatApiBaseUrl, replyTarget }, payload, info);
+                await deliverXbotReply({
+                  cfg,
+                  wechatApiBaseUrl,
+                  replyTarget,
+                  allocateReplyIndex: () => outboundReplyIndex++,
+                  onWarn: (message: string) => {
+                    args.api.logger?.warn?.(message);
+                  },
+                }, payload, info);
               },
               onError: (err: unknown) => {
                 args.api.logger?.error?.(
