@@ -59,6 +59,8 @@ export type ParsedXbotInbound = {
   route: XbotRoute;
   msgType: string;
   rawBody: string;
+  /** Public downloadable media URL resolved by xchatbot (image/emoji/video cover). */
+  mediaUrl?: string;
   senderId: string;
   senderName: string;
   botMentioned: boolean;

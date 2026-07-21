@@ -204,6 +204,17 @@ export async function dispatchXbotInbound(args: {
     body: agentVisibleBody,
   });
 
+  const inboundMediaUrl = silentHistoryFlush ? '' : String(parsed.mediaUrl || '').trim();
+  const inboundMedia = inboundMediaUrl
+    ? [{
+        path: inboundMediaUrl,
+        url: inboundMediaUrl,
+        contentType: 'image/jpeg',
+        kind: 'image' as const,
+        messageId: parsed.messageId,
+      }]
+    : undefined;
+
   const inboundRuntime = resolveXbotChannelInboundRuntime(api);
   const ctxPayload = (await inboundRuntime.buildContext({
     channel: CHANNEL_ID,
@@ -246,6 +257,7 @@ export async function dispatchXbotInbound(args: {
       bodyForAgent: agentVisibleBody,
       commandBody: effectiveRawBody,
     },
+    ...(inboundMedia ? { media: inboundMedia } : {}),
     access: {
       mentions: {
         canDetectMention: true,

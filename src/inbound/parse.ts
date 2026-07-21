@@ -84,6 +84,7 @@ export function parseXbotInboundParams(
   const conversationId = asString(input.conversationId).trim();
   const msgType = asString(input.type || input.msgType || 'text').trim().toLowerCase() || 'text';
   const content = asString(input.content || input.text || input.body);
+  const mediaUrl = asString(input.mediaUrl || input.media || input.imageUrl).trim();
   const timestampRaw = Number(input.timestamp ?? input.ts ?? Date.now());
   const timestamp =
     Number.isFinite(timestampRaw) && timestampRaw > 0
@@ -130,6 +131,7 @@ export function parseXbotInboundParams(
     route,
     msgType,
     rawBody,
+    ...(mediaUrl ? { mediaUrl } : {}),
     senderId,
     senderName,
     botMentioned,
