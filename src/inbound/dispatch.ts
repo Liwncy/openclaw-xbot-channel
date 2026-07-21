@@ -205,12 +205,21 @@ export async function dispatchXbotInbound(args: {
   });
 
   const inboundMediaUrl = silentHistoryFlush ? '' : String(parsed.mediaUrl || '').trim();
+  const inboundMediaKind = silentHistoryFlush
+    ? 'image'
+    : (parsed.mediaKind === 'video' || parsed.mediaKind === 'emoji' || parsed.mediaKind === 'image'
+      ? parsed.mediaKind
+      : 'image');
   const inboundMedia = inboundMediaUrl
     ? [{
         path: inboundMediaUrl,
         url: inboundMediaUrl,
-        contentType: 'image/jpeg',
-        kind: 'image' as const,
+        contentType: inboundMediaKind === 'video'
+          ? 'video/mp4'
+          : inboundMediaKind === 'emoji'
+            ? 'image/gif'
+            : 'image/jpeg',
+        kind: (inboundMediaKind === 'video' ? 'video' : 'image') as 'image' | 'video',
         messageId: parsed.messageId,
       }]
     : undefined;

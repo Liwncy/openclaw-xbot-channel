@@ -85,6 +85,11 @@ export function parseXbotInboundParams(
   const msgType = asString(input.type || input.msgType || 'text').trim().toLowerCase() || 'text';
   const content = asString(input.content || input.text || input.body);
   const mediaUrl = asString(input.mediaUrl || input.media || input.imageUrl).trim();
+  const mediaKindRaw = asString(input.mediaKind || input.mediaType).trim().toLowerCase();
+  const mediaKind =
+    mediaKindRaw === 'video' || mediaKindRaw === 'emoji' || mediaKindRaw === 'image'
+      ? mediaKindRaw as 'image' | 'video' | 'emoji'
+      : undefined;
   const timestampRaw = Number(input.timestamp ?? input.ts ?? Date.now());
   const timestamp =
     Number.isFinite(timestampRaw) && timestampRaw > 0
@@ -132,6 +137,7 @@ export function parseXbotInboundParams(
     msgType,
     rawBody,
     ...(mediaUrl ? { mediaUrl } : {}),
+    ...(mediaUrl && mediaKind ? { mediaKind } : {}),
     senderId,
     senderName,
     botMentioned,
