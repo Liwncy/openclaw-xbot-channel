@@ -265,6 +265,8 @@ export async function dispatchXbotInbound(args: {
     to: canonicalTo,
     route: parsed.route,
     replyToMessageId: parsed.messageId,
+    xchatbotApiBaseUrl: parsed.xchatbotApiBaseUrl,
+    xchatbotAdminToken: parsed.xchatbotAdminToken,
   };
 
   const effectiveReply = buildXbotReplyConfig(cfg);
