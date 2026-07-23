@@ -23,6 +23,7 @@ import {
   type XbotHistoryEntry,
 } from './group-history.ts';
 import { decideXbotInboundTurn } from './turn-decision.ts';
+import { mapOpenClawPayloadToReplies } from '../outbound/map-reply.ts';
 import { resolveOutboundReceiver } from '../targets.ts';
 import type { ParsedXbotInbound, XbotChannelConfigRoot, XbotReplyTarget } from '../types.ts';
 import { sendViaXchatbotIfConfigured } from '../xchatbot-outbound.ts';
@@ -49,15 +50,22 @@ const HISTORY_FLUSH_RAW_BODY =
 
 export async function deliverXbotReply(
   deliverCtx: XbotDeliverContext,
-  payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] },
+  payload: {
+    text?: string;
+    mediaUrl?: string;
+    mediaUrls?: string[];
+    audioAsVoice?: boolean;
+    asVoice?: boolean;
+    mimeType?: string;
+    fileName?: string;
+    type?: string;
+    kind?: string;
+  },
   _info?: { kind?: 'tool' | 'block' | 'final' },
 ): Promise<void> {
-  const text = String(payload.text || '').trim();
-  const mediaUrl = String(payload.mediaUrl || payload.mediaUrls?.[0] || '').trim();
-  const outboundReplies = [
-    ...(mediaUrl ? [{ type: 'image' as const, mediaId: mediaUrl, originalUrl: mediaUrl }] : []),
-    ...(text ? [{ type: 'text' as const, content: text }] : []),
-  ];
+  const outboundReplies = mapOpenClawPayloadToReplies(payload);
+  if (outboundReplies.length === 0) return;
+
   const relayedByXchatbot = await sendViaXchatbotIfConfigured({
     cfg: deliverCtx.cfg,
     replyTarget: deliverCtx.replyTarget,

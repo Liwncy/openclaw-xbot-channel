@@ -13,6 +13,11 @@ export type OpenClawReplyDispatcherPayload = {
   mediaUrl?: string;
   mediaUrls?: string[];
   audioAsVoice?: boolean;
+  asVoice?: boolean;
+  mimeType?: string;
+  fileName?: string;
+  type?: string;
+  kind?: string;
 };
 
 export type OpenClawReplyDispatchInfo = { kind?: 'tool' | 'block' | 'final' };

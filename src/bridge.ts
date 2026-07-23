@@ -284,6 +284,11 @@ export class XbotBridge {
     to?: string;
     text?: string;
     mediaUrl?: string;
+    mimeType?: string;
+    fileName?: string;
+    type?: string;
+    audioAsVoice?: boolean;
+    asVoice?: boolean;
     wechatApiBaseUrl?: string;
   }) => {
     const cfg = this.cfg();
@@ -294,6 +299,11 @@ export class XbotBridge {
       to,
       text: asString(ctx.text),
       mediaUrl: asString(ctx.mediaUrl),
+      mimeType: asString(ctx.mimeType) || undefined,
+      fileName: asString(ctx.fileName) || undefined,
+      type: asString(ctx.type) || undefined,
+      audioAsVoice: ctx.audioAsVoice === true,
+      asVoice: ctx.asVoice === true,
       wechatApiBaseUrl: ctx.wechatApiBaseUrl || this.resolveApiBaseUrl(),
     });
   };

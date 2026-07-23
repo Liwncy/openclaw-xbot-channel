@@ -1,8 +1,7 @@
+import type { XchatbotReply } from './outbound/map-reply.ts';
 import type { XbotChannelConfigRoot, XbotReplyTarget } from './types.ts';
 
-type XchatbotReply =
-  | { type: 'text'; content: string }
-  | { type: 'image'; mediaId: string; originalUrl?: string };
+export type { XchatbotReply };
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';

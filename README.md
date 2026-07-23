@@ -10,9 +10,11 @@ OpenClaw 的 **xchatbot 微信频道**插件（`channelId=xbot`）。
 微信消息 → xchatbot Worker (/webhook/wechat)
          → OpenClaw Gateway (xbot.inbound)
          → Agent 推理
-         → xbot 出站 HTTP (/api/message/text)
-         → 微信回复
+         → xchatbot /admin/xbot/outbound
+         → 微信回复（文本 / 图片 / 语音 / 视频；文件·普通音频降级为链接卡片）
 ```
+
+出站媒体按 URL 后缀、`mimeType`、`audioAsVoice` 自动分类；Agent 主路径走 xchatbot（含语音 SILK 转换），工具直发走微信网关。
 
 与 `agent-bridge` 插件的区别：
 

@@ -37,6 +37,11 @@ export function createXbotChannelPlugin(getBridge: () => XbotBridge) {
       to?: string;
       text?: string;
       mediaUrl?: string;
+      mimeType?: string;
+      fileName?: string;
+      type?: string;
+      audioAsVoice?: boolean;
+      asVoice?: boolean;
     }) => getBridge().channelSendMedia(ctx),
   };
 
@@ -224,6 +229,21 @@ export function createXbotChannelPlugin(getBridge: () => XbotBridge) {
         || firstAttachment?.mediaUrl
         || firstAttachment?.url,
       ).trim();
+      const mimeType = asString(
+        input.mimeType
+        || input.contentType
+        || firstAttachment?.mimeType
+        || firstAttachment?.contentType,
+      ).trim();
+      const fileName = asString(
+        input.fileName
+        || input.filename
+        || firstAttachment?.fileName
+        || firstAttachment?.filename
+        || firstAttachment?.name,
+      ).trim();
+      const mediaType = asString(input.type || input.kind || firstAttachment?.type || firstAttachment?.kind).trim();
+      const audioAsVoice = input.audioAsVoice === true || input.asVoice === true;
       const bridge = getBridge();
       const result = mediaUrl
         ? await bridge.channelSendMedia({
@@ -231,6 +251,11 @@ export function createXbotChannelPlugin(getBridge: () => XbotBridge) {
             to,
             text: message,
             mediaUrl,
+            mimeType: mimeType || undefined,
+            fileName: fileName || undefined,
+            type: mediaType || undefined,
+            audioAsVoice,
+            asVoice: audioAsVoice,
           })
         : await bridge.channelSendText({
             accountId,
@@ -255,6 +280,11 @@ export function createXbotChannelPlugin(getBridge: () => XbotBridge) {
           to?: string;
           text?: string;
           mediaUrl?: string;
+          mimeType?: string;
+          fileName?: string;
+          type?: string;
+          audioAsVoice?: boolean;
+          asVoice?: boolean;
         }) => getBridge().channelSendMedia(ctx),
       },
     },
