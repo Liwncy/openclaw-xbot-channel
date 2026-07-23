@@ -62,9 +62,14 @@ export async function deliverXbotReply(
     type?: string;
     kind?: string;
   },
-  _info?: { kind?: 'tool' | 'block' | 'final' },
+  info?: { kind?: 'tool' | 'block' | 'final' },
 ): Promise<void> {
-  const outboundReplies = mapOpenClawPayloadToReplies(payload);
+  // block 流式只转发文字；媒体等 final，避免和 gateway outbound/final 叠成多条语音
+  const effectivePayload = info?.kind === 'block'
+    ? { text: payload.text }
+    : payload;
+
+  const outboundReplies = mapOpenClawPayloadToReplies(effectivePayload);
   if (outboundReplies.length === 0) return;
 
   const relayedByXchatbot = await sendViaXchatbotIfConfigured({

@@ -1,6 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import { resolveBotWechatId, resolveBotWechatName } from './accounts.ts';
 import type { XchatbotReply } from './outbound/map-reply.ts';
-import type { XbotChannelConfigRoot, XbotReplyTarget } from './types.ts';
+import { resolveLocalMediaInReplies } from './outbound/resolve-local-media.ts';
+import {
+  buildOutboundDedupeKey,
+  rememberOutboundSent,
+  shouldSkipDuplicateOutbound,
+} from './outbound/send-dedupe.ts';
+import type { XbotChannelConfigRoot, XbotReplyTarget, XbotRoute } from './types.ts';
 
 export type { XchatbotReply };
 
@@ -14,14 +21,14 @@ function getChannelConfig(cfg: XbotChannelConfigRoot | null | undefined) {
 
 function resolveXchatbotApiBaseUrl(
   cfg: XbotChannelConfigRoot | null | undefined,
-  replyTarget?: XbotReplyTarget,
+  replyTarget?: Pick<XbotReplyTarget, 'xchatbotApiBaseUrl'>,
 ): string {
   return asString(replyTarget?.xchatbotApiBaseUrl || getChannelConfig(cfg).chatLogApiBaseUrl);
 }
 
 function resolveXchatbotAdminToken(
   cfg: XbotChannelConfigRoot | null | undefined,
-  replyTarget?: XbotReplyTarget,
+  replyTarget?: Pick<XbotReplyTarget, 'xchatbotAdminToken'>,
 ): string {
   return asString(replyTarget?.xchatbotAdminToken || getChannelConfig(cfg).chatLogAdminToken);
 }
@@ -34,16 +41,33 @@ function buildOutboundBody(args: {
   const route = args.replyTarget.route;
   const botSenderId = resolveBotWechatId(args.cfg);
   const botSenderName = resolveBotWechatName(args.cfg);
+  const causedByMessageId = asString(args.replyTarget.replyToMessageId) || `xbot-outbound-${randomUUID()}`;
   return {
     source: route.kind === 'group' ? 'group' : 'private',
     from: route.userId || route.to,
     to: route.to,
     ...(route.kind === 'group' ? { roomId: route.groupId || route.to } : {}),
-    causedByMessageId: args.replyTarget.replyToMessageId,
+    causedByMessageId,
     pluginName: 'openclaw-xbot',
     ...(botSenderId ? { botSenderId } : {}),
     ...(botSenderName ? { botSenderName } : {}),
     replies: args.replies,
+  };
+}
+
+export function buildReplyTargetForRoute(args: {
+  cfg: XbotChannelConfigRoot;
+  accountId?: string | null;
+  route: XbotRoute;
+  replyToMessageId?: string;
+}): XbotReplyTarget {
+  return {
+    accountId: asString(args.accountId) || 'default',
+    to: args.route.to,
+    route: args.route,
+    replyToMessageId: asString(args.replyToMessageId) || undefined,
+    xchatbotApiBaseUrl: resolveXchatbotApiBaseUrl(args.cfg),
+    xchatbotAdminToken: resolveXchatbotAdminToken(args.cfg),
   };
 }
 
@@ -55,19 +79,31 @@ export async function sendViaXchatbotIfConfigured(args: {
 }): Promise<boolean> {
   const apiBaseUrl = resolveXchatbotApiBaseUrl(args.cfg, args.replyTarget);
   const adminToken = resolveXchatbotAdminToken(args.cfg, args.replyTarget);
-  if (!apiBaseUrl || !adminToken || !args.replyTarget.replyToMessageId || args.replies.length === 0) {
+  if (!apiBaseUrl || !adminToken || args.replies.length === 0) {
     return false;
   }
 
   const url = new URL('/admin/xbot/outbound', apiBaseUrl).toString();
   try {
+    const replies = await resolveLocalMediaInReplies(args.replies);
+    const dedupeKey = buildOutboundDedupeKey({
+      to: args.replyTarget.route.groupId
+        || args.replyTarget.route.userId
+        || args.replyTarget.to,
+      replies,
+    });
+    if (shouldSkipDuplicateOutbound(dedupeKey)) {
+      args.onWarn?.(`[xbot] skip duplicate outbound within 45s`);
+      return true;
+    }
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${adminToken}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify(buildOutboundBody(args)),
+      body: JSON.stringify(buildOutboundBody({ ...args, replies })),
     });
     if (!response.ok) {
       const text = await response.text().catch(() => '');
@@ -76,6 +112,7 @@ export async function sendViaXchatbotIfConfigured(args: {
       );
       return false;
     }
+    rememberOutboundSent(dedupeKey);
     return true;
   } catch (error) {
     args.onWarn?.(
