@@ -11,6 +11,12 @@ export type XbotChannelConfigSection = XbotChannelPolicyConfig & {
   chatLogAdminToken?: string;
   botWechatId?: string;
   botWechatName?: string;
+  /** 触发 OpenClaw 时是否注入 D1 近期聊天上下文，默认 true */
+  injectChatContext?: boolean;
+  /** D1 近期上下文最多条数，默认 20 */
+  contextHistoryLimit?: number;
+  /** D1 近期上下文总字数上限，默认 4000 */
+  contextMaxChars?: number;
   /** 是否把中间块（如调技能前的说明）发到微信，默认 true */
   blockStreaming?: boolean;
   /** 是否把 tool 结果也转发到微信，默认 false */

@@ -1,5 +1,11 @@
 import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolContext } from 'openclaw/plugin-sdk/core';
 import { jsonResult } from 'openclaw/plugin-sdk/core';
+import {
+  queryChatLogApi,
+  resolveChatLogAdminToken,
+  resolveChatLogApiBaseUrl,
+  toBoundedInteger,
+} from './chat-log-client.ts';
 import { parseExplicitTarget } from './targets.ts';
 import type { XbotChannelConfigRoot } from './types.ts';
 
@@ -14,16 +20,6 @@ type ChatLogToolParams = {
   hours?: number;
   since?: string;
   until?: string;
-};
-
-type XchatbotChatLogResponse = {
-  ok?: boolean;
-  sessionId?: string;
-  sessionType?: string;
-  filters?: Record<string, unknown>;
-  stats?: Record<string, unknown>;
-  messages?: unknown[];
-  error?: string;
 };
 
 const XBOT_CHAT_HISTORY_PARAMETERS = {
@@ -85,19 +81,6 @@ function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function getChannelConfig(cfg: XbotChannelConfigRoot | null | undefined) {
-  return cfg?.channels?.xbot || {};
-}
-
-function resolveChatLogApiBaseUrl(cfg: XbotChannelConfigRoot | null | undefined): string {
-  const channelCfg = getChannelConfig(cfg);
-  return asString(channelCfg.chatLogApiBaseUrl || channelCfg.wechatApiBaseUrl);
-}
-
-function resolveChatLogAdminToken(cfg: XbotChannelConfigRoot | null | undefined): string {
-  return asString(getChannelConfig(cfg).chatLogAdminToken);
-}
-
 function resolveCurrentSessionId(toolContext: OpenClawPluginToolContext): string {
   const candidates = [
     toolContext.deliveryContext?.to,
@@ -114,12 +97,6 @@ function resolveCurrentSessionId(toolContext: OpenClawPluginToolContext): string
     }
   }
   return '';
-}
-
-function toBoundedInteger(value: unknown, fallback: number, min: number, max: number): number {
-  const numeric = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(numeric)) return fallback;
-  return Math.max(min, Math.min(max, Math.floor(numeric)));
 }
 
 function toBoolean(value: unknown, fallback: boolean): boolean {
@@ -140,7 +117,16 @@ function buildQueryPayload(params: ChatLogToolParams, toolContext: OpenClawPlugi
   const since = asString(params.since);
   const until = asString(params.until);
 
-  const payload: Record<string, unknown> = {
+  const payload: {
+    sessionId: string;
+    limit: number;
+    maxChars: number;
+    textOnly: boolean;
+    direction?: 'inbound' | 'outbound';
+    actorType?: 'member' | 'bot' | 'system';
+    since?: string | number;
+    until?: string | number;
+  } = {
     sessionId,
     limit,
     maxChars,
@@ -162,34 +148,6 @@ function buildQueryPayload(params: ChatLogToolParams, toolContext: OpenClawPlugi
     payload.until = until;
   }
   return payload;
-}
-
-async function queryChatLogApi(args: {
-  apiBaseUrl: string;
-  adminToken?: string;
-  payload: Record<string, unknown>;
-}): Promise<XchatbotChatLogResponse> {
-  const url = new URL('/admin/chat-log/query', args.apiBaseUrl).toString();
-  const headers = new Headers({
-    'content-type': 'application/json',
-  });
-  if (args.adminToken) {
-    headers.set('authorization', `Bearer ${args.adminToken}`);
-  }
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(args.payload),
-    signal: AbortSignal.timeout(20_000),
-  });
-  const raw = await response.text();
-  const data = raw ? JSON.parse(raw) as XchatbotChatLogResponse : {};
-  if (!response.ok || data.ok === false) {
-    const reason = asString(data?.error) || `HTTP ${response.status}`;
-    throw new Error(`xchatbot chat log query failed: ${reason}`);
-  }
-  return data;
 }
 
 export function registerXbotChatHistoryTool(api: OpenClawPluginApi): void {

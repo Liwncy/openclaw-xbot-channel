@@ -1,3 +1,4 @@
+import { resolveBotWechatId, resolveBotWechatName } from './accounts.ts';
 import type { XchatbotReply } from './outbound/map-reply.ts';
 import type { XbotChannelConfigRoot, XbotReplyTarget } from './types.ts';
 
@@ -26,10 +27,13 @@ function resolveXchatbotAdminToken(
 }
 
 function buildOutboundBody(args: {
+  cfg: XbotChannelConfigRoot;
   replyTarget: XbotReplyTarget;
   replies: XchatbotReply[];
 }) {
   const route = args.replyTarget.route;
+  const botSenderId = resolveBotWechatId(args.cfg);
+  const botSenderName = resolveBotWechatName(args.cfg);
   return {
     source: route.kind === 'group' ? 'group' : 'private',
     from: route.userId || route.to,
@@ -37,6 +41,8 @@ function buildOutboundBody(args: {
     ...(route.kind === 'group' ? { roomId: route.groupId || route.to } : {}),
     causedByMessageId: args.replyTarget.replyToMessageId,
     pluginName: 'openclaw-xbot',
+    ...(botSenderId ? { botSenderId } : {}),
+    ...(botSenderName ? { botSenderName } : {}),
     replies: args.replies,
   };
 }

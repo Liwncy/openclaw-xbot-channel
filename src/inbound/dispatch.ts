@@ -23,6 +23,7 @@ import {
   type XbotHistoryEntry,
 } from './group-history.ts';
 import { decideXbotInboundTurn } from './turn-decision.ts';
+import { loadInjectedChatContextBody } from './chat-context.ts';
 import { mapOpenClawPayloadToReplies } from '../outbound/map-reply.ts';
 import { resolveOutboundReceiver } from '../targets.ts';
 import type { ParsedXbotInbound, XbotChannelConfigRoot, XbotReplyTarget } from '../types.ts';
@@ -182,21 +183,37 @@ export async function dispatchXbotInbound(args: {
   const effectiveRawBody = silentHistoryFlush ? HISTORY_FLUSH_RAW_BODY : parsed.rawBody;
   let outboundReplyIndex = 0;
 
-  const agentVisibleBody = silentHistoryFlush
-    ? buildXbotAgentBodyWithHistory({
+  let agentVisibleBody: string;
+  if (silentHistoryFlush) {
+    agentVisibleBody = buildXbotAgentBodyWithHistory({
+      entries: pendingHistoryEntries,
+      currentSenderName: HISTORY_FLUSH_SENDER_NAME,
+      currentSenderId: HISTORY_FLUSH_SENDER_ID,
+      currentBody: HISTORY_FLUSH_RAW_BODY,
+    });
+  } else {
+    const injectedBody = await loadInjectedChatContextBody({
+      cfg,
+      channelCfg: channelCfg as Record<string, unknown>,
+      parsed,
+      onWarn: (message) => {
+        api.logger?.warn?.(message);
+      },
+    });
+    if (injectedBody) {
+      // D1 近期上下文已覆盖 pending，避免重复堆叠
+      agentVisibleBody = injectedBody;
+    } else if (parsed.peer.kind === 'group') {
+      agentVisibleBody = buildXbotAgentBodyWithHistory({
         entries: pendingHistoryEntries,
-        currentSenderName: HISTORY_FLUSH_SENDER_NAME,
-        currentSenderId: HISTORY_FLUSH_SENDER_ID,
-        currentBody: HISTORY_FLUSH_RAW_BODY,
-      })
-    : parsed.peer.kind === 'group'
-      ? buildXbotAgentBodyWithHistory({
-          entries: pendingHistoryEntries,
-          currentSenderName: parsed.senderName,
-          currentSenderId: parsed.senderId,
-          currentBody: parsed.rawBody,
-        })
-      : parsed.rawBody;
+        currentSenderName: parsed.senderName,
+        currentSenderId: parsed.senderId,
+        currentBody: parsed.rawBody,
+      });
+    } else {
+      agentVisibleBody = parsed.rawBody;
+    }
+  }
 
   const envelopeFrom = silentHistoryFlush
     ? HISTORY_FLUSH_SENDER_NAME

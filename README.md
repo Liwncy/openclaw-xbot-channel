@@ -70,8 +70,27 @@ openclaw gateway restart
 | `groupReplyMode` | `mention`（默认）：群消息都攒历史，仅点名/提到昵称才回复；`all`：每条都回复 |
 | `historyLimit` | 群 pending 历史条数上限（默认 `50`） |
 | `historyForce` | 窗满是否静默 flush 进 session（默认 `true`）；`false` 则只滑动丢旧消息 |
+| `injectChatContext` | 触发 OpenClaw 时是否注入 D1 近期聊天上下文（默认 `true`） |
+| `contextHistoryLimit` | 注入的近期消息条数上限（默认 `20`） |
+| `contextMaxChars` | 注入上下文总字数上限（默认 `4000`） |
+| `chatLogApiBaseUrl` | 查 D1 的 xchatbot 根地址；默认复用 `wechatApiBaseUrl` |
+| `chatLogAdminToken` | 查 D1 用的 Bearer Token（与 Worker `ADMIN_TOKEN` 一致）；入站也会透传 token，可不填 |
 | `blockStreaming` | 是否把中间回复发到微信（如调技能前的说明），默认 `true` |
 | `allowTool` | 是否把 tool 结果也发到微信，默认 `false` |
+
+### 近期聊天上下文
+
+每次真正分发给 Agent 时（非静默 history flush），频道会先查 xchatbot `/admin/chat-log/query`，把近期群/私聊记录拼进正文：
+
+```text
+[近期聊天上下文，供理解；请回复最后一条]
+群成员「张三(wxid_xxx)」说：……
+机器人：……
+[当前消息]
+群成员「李四(wxid_yyy)」说：@小聪明儿 帮我看看
+```
+
+查询失败时回退到原来的内存 pending / 仅当前消息，不阻断回复。更深的按时间窗查询仍可用工具 `xbot_chat_history`。
 
 ### 群聊行为（对齐 BNCR）
 

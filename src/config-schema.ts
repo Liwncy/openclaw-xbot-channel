@@ -11,6 +11,9 @@ export const XbotConfigSchema = {
     chatLogAdminToken: { type: 'string' },
     botWechatId: { type: 'string' },
     botWechatName: { type: 'string' },
+    injectChatContext: { type: 'boolean' },
+    contextHistoryLimit: { type: 'number' },
+    contextMaxChars: { type: 'number' },
     dmPolicy: {
       type: 'string',
       enum: ['open', 'allowlist', 'disabled'],
