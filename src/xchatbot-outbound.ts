@@ -3,9 +3,8 @@ import { resolveBotWechatId, resolveBotWechatName } from './accounts.ts';
 import type { XchatbotReply } from './outbound/map-reply.ts';
 import { resolveLocalMediaInReplies } from './outbound/resolve-local-media.ts';
 import {
-  buildOutboundDedupeKey,
-  rememberOutboundSent,
-  shouldSkipDuplicateOutbound,
+  filterDuplicateReplies,
+  rememberRepliesSent,
 } from './outbound/send-dedupe.ts';
 import type { XbotChannelConfigRoot, XbotReplyTarget, XbotRoute } from './types.ts';
 
@@ -84,17 +83,26 @@ export async function sendViaXchatbotIfConfigured(args: {
   }
 
   const url = new URL('/admin/xbot/outbound', apiBaseUrl).toString();
+  const to = args.replyTarget.route.groupId
+    || args.replyTarget.route.userId
+    || args.replyTarget.to;
+
   try {
-    const replies = await resolveLocalMediaInReplies(args.replies);
-    const dedupeKey = buildOutboundDedupeKey({
-      to: args.replyTarget.route.groupId
-        || args.replyTarget.route.userId
-        || args.replyTarget.to,
-      replies,
-    });
-    if (shouldSkipDuplicateOutbound(dedupeKey)) {
-      args.onWarn?.(`[xbot] skip duplicate outbound within 45s`);
+    const resolved = await resolveLocalMediaInReplies(args.replies);
+    const { replies, skipped } = filterDuplicateReplies({ to, replies: resolved });
+    if (skipped > 0) {
+      args.onWarn?.(`[xbot] skip ${skipped} duplicate reply item(s) within 45s`);
+    }
+    if (replies.length === 0) {
       return true;
+    }
+
+    const mediaKinds = replies
+      .filter((item) => item.type !== 'text')
+      .map((item) => item.type)
+      .join(',');
+    if (mediaKinds) {
+      args.onWarn?.(`[xbot] outbound media kinds=${mediaKinds} count=${replies.length}`);
     }
 
     const response = await fetch(url, {
@@ -112,7 +120,7 @@ export async function sendViaXchatbotIfConfigured(args: {
       );
       return false;
     }
-    rememberOutboundSent(dedupeKey);
+    rememberRepliesSent({ to, replies });
     return true;
   } catch (error) {
     args.onWarn?.(

@@ -18,35 +18,30 @@ function prune(now: number): void {
 function fingerprintMedia(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return '';
-  // 本地路径 / URL：整段；base64：用头尾，避免整包进 Map
   if (trimmed.length <= 240) return trimmed.toLowerCase();
   return `${trimmed.slice(0, 96)}…${trimmed.slice(-48)}:${trimmed.length}`;
 }
 
-export function buildOutboundDedupeKey(args: {
+function resolveToKey(to: string): string {
+  return to.trim().toLowerCase();
+}
+
+export function buildMediaDedupeKey(args: {
   to: string;
-  replies: Array<{ type: string; mediaId?: string; content?: string }>;
+  type: string;
+  mediaId?: string;
 }): string | null {
-  const to = args.to.trim().toLowerCase();
-  if (!to || args.replies.length === 0) return null;
+  const to = resolveToKey(args.to);
+  const media = fingerprintMedia(args.mediaId || '');
+  if (!to || !media) return null;
+  return `media|${to}|${args.type}:${media}`;
+}
 
-  const mediaKeys = args.replies
-    .filter((item) => item.type === 'voice' || item.type === 'image' || item.type === 'video')
-    .map((item) => `${item.type}:${fingerprintMedia(item.mediaId || '')}`)
-    .filter((item) => !item.endsWith(':'));
-
-  if (mediaKeys.length > 0) {
-    return `media|${to}|${mediaKeys.join('|')}`;
-  }
-
-  const texts = args.replies
-    .filter((item) => item.type === 'text')
-    .map((item) => (item.content || '').trim())
-    .filter(Boolean);
-  if (texts.length === 1 && texts[0]!.length <= 200) {
-    return `text|${to}|${texts[0]}`;
-  }
-  return null;
+export function buildTextDedupeKey(args: { to: string; content: string }): string | null {
+  const to = resolveToKey(args.to);
+  const content = args.content.trim();
+  if (!to || !content || content.length > 200) return null;
+  return `text|${to}|${content}`;
 }
 
 /** 若短时间内发过相同内容则返回 true（应跳过）。 */
@@ -63,4 +58,75 @@ export function rememberOutboundSent(key: string | null): void {
   const now = Date.now();
   prune(now);
   recent.set(key, { sentAt: now });
+}
+
+/**
+ * 按条去重：已发过的语音/图片跳过，但仍保留新文字。
+ * 避免「block 发了语音 → final 整包被跳过 → 连说明文字也没了」。
+ */
+export function filterDuplicateReplies<T extends {
+  type: string;
+  mediaId?: string;
+  content?: string;
+}>(args: {
+  to: string;
+  replies: T[];
+}): { replies: T[]; skipped: number } {
+  const kept: T[] = [];
+  let skipped = 0;
+
+  for (const reply of args.replies) {
+    if (reply.type === 'voice' || reply.type === 'image' || reply.type === 'video') {
+      const key = buildMediaDedupeKey({
+        to: args.to,
+        type: reply.type,
+        mediaId: reply.mediaId,
+      });
+      if (shouldSkipDuplicateOutbound(key)) {
+        skipped += 1;
+        continue;
+      }
+      kept.push(reply);
+      continue;
+    }
+
+    if (reply.type === 'text') {
+      const key = buildTextDedupeKey({
+        to: args.to,
+        content: reply.content || '',
+      });
+      if (shouldSkipDuplicateOutbound(key)) {
+        skipped += 1;
+        continue;
+      }
+      kept.push(reply);
+      continue;
+    }
+
+    kept.push(reply);
+  }
+
+  return { replies: kept, skipped };
+}
+
+export function rememberRepliesSent(args: {
+  to: string;
+  replies: Array<{ type: string; mediaId?: string; content?: string }>;
+}): void {
+  for (const reply of args.replies) {
+    if (reply.type === 'voice' || reply.type === 'image' || reply.type === 'video') {
+      rememberOutboundSent(buildMediaDedupeKey({
+        to: args.to,
+        type: reply.type,
+        mediaId: reply.mediaId,
+      }));
+      continue;
+    }
+    if (reply.type === 'text') {
+      rememberOutboundSent(buildTextDedupeKey({
+        to: args.to,
+        content: reply.content || '',
+      }));
+    }
+  }
 }

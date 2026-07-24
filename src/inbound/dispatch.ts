@@ -64,12 +64,11 @@ export async function deliverXbotReply(
   },
   info?: { kind?: 'tool' | 'block' | 'final' },
 ): Promise<void> {
-  // block 流式只转发文字；媒体等 final，避免和 gateway outbound/final 叠成多条语音
-  const effectivePayload = info?.kind === 'block'
-    ? { text: payload.text }
-    : payload;
-
-  const outboundReplies = mapOpenClawPayloadToReplies(effectivePayload);
+  // 注意：不能在 block 阶段丢掉 mediaUrl。
+  // OpenClaw 常把语音只挂在 block/tool 上，final 只剩「发过去了」文字；丢掉媒体会导致微信完全看不到语音。
+  // 重复投递靠 send-dedupe（同媒体 45s 内只发一次；文字仍可发）。
+  void info;
+  const outboundReplies = mapOpenClawPayloadToReplies(payload);
   if (outboundReplies.length === 0) return;
 
   const relayedByXchatbot = await sendViaXchatbotIfConfigured({
