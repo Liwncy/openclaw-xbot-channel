@@ -25,6 +25,11 @@ import {
 import { decideXbotInboundTurn } from './turn-decision.ts';
 import { loadInjectedChatContextBody } from './chat-context.ts';
 import { mapOpenClawPayloadToReplies } from '../outbound/map-reply.ts';
+import {
+  filterRepliesAfterVoiceSent,
+  shouldHoldVoiceFailureNarrative,
+  wasVoiceRecentlySent,
+} from '../outbound/voice-narrative-guard.ts';
 import { resolveOutboundReceiver } from '../targets.ts';
 import type { ParsedXbotInbound, XbotChannelConfigRoot, XbotReplyTarget } from '../types.ts';
 import { sendViaXchatbotIfConfigured } from '../xchatbot-outbound.ts';
@@ -35,6 +40,8 @@ export type XbotDeliverContext = {
   replyTarget: XbotReplyTarget;
   allocateReplyIndex?: () => number;
   onWarn?: (message: string) => void;
+  /** 本轮入站回复内是否已成功发出过语音（可变，跨多次 deliver 共享）。 */
+  voiceSentThisTurn?: { value: boolean };
 };
 
 export type XbotDispatchResult = {
@@ -67,9 +74,54 @@ export async function deliverXbotReply(
   // 注意：不能在 block 阶段丢掉 mediaUrl。
   // OpenClaw 常把语音只挂在 block/tool 上，final 只剩「发过去了」文字；丢掉媒体会导致微信完全看不到语音。
   // 重复投递靠 send-dedupe（同媒体 45s 内只发一次；文字仍可发）。
-  void info;
-  const outboundReplies = mapOpenClawPayloadToReplies(payload);
+  const voiceSentFlag = deliverCtx.voiceSentThisTurn || { value: false };
+  deliverCtx.voiceSentThisTurn = voiceSentFlag;
+  const to = deliverCtx.replyTarget.route.groupId
+    || deliverCtx.replyTarget.route.userId
+    || deliverCtx.replyTarget.to;
+  if (wasVoiceRecentlySent(to)) {
+    voiceSentFlag.value = true;
+  }
+
+  let outboundReplies = mapOpenClawPayloadToReplies(payload);
   if (outboundReplies.length === 0) return;
+
+  // 本轮/近期已发出语音后：丢掉「做不了 / 没发出去」定论，避免成功后又补一句失败。
+  if (voiceSentFlag.value) {
+    const filtered = filterRepliesAfterVoiceSent(outboundReplies);
+    if (filtered.dropped > 0) {
+      deliverCtx.onWarn?.(
+        `[xbot] drop ${filtered.dropped} stale voice-failure text after voice already sent`,
+      );
+    }
+    outboundReplies = filtered.replies;
+    if (outboundReplies.length === 0) return;
+  } else {
+    // 语音尚未成功：中间 block 上的失败定论先扣住，等 final；避免先说做不了再出语音。
+    const held: typeof outboundReplies = [];
+    const kept: typeof outboundReplies = [];
+    for (const reply of outboundReplies) {
+      if (
+        reply.type === 'text'
+        && shouldHoldVoiceFailureNarrative({
+          kind: info?.kind,
+          voiceSentThisTurn: false,
+          text: reply.content || '',
+        })
+      ) {
+        held.push(reply);
+        continue;
+      }
+      kept.push(reply);
+    }
+    if (held.length > 0) {
+      deliverCtx.onWarn?.(
+        `[xbot] hold ${held.length} early voice-failure text until final (or drop if voice succeeds)`,
+      );
+    }
+    outboundReplies = kept;
+    if (outboundReplies.length === 0) return;
+  }
 
   const relayedByXchatbot = await sendViaXchatbotIfConfigured({
     cfg: deliverCtx.cfg,
@@ -79,6 +131,10 @@ export async function deliverXbotReply(
   });
   if (!relayedByXchatbot) {
     throw new Error('xchatbot outbound relay is not configured or failed');
+  }
+
+  if (outboundReplies.some((item) => item.type === 'voice')) {
+    voiceSentFlag.value = true;
   }
 }
 
@@ -355,8 +411,9 @@ export async function dispatchXbotInbound(args: {
             );
           },
         },
-        runDispatch: async () =>
-          dispatchOpenClawReplyWithBufferedBlockDispatcher(api, {
+        runDispatch: async () => {
+          const voiceSentThisTurn = { value: false };
+          return dispatchOpenClawReplyWithBufferedBlockDispatcher(api, {
             ctx: ctxPayload,
             cfg: effectiveReply.replyCfg,
             dispatcherOptions: {
@@ -377,6 +434,7 @@ export async function dispatchXbotInbound(args: {
                   wechatApiBaseUrl,
                   replyTarget,
                   allocateReplyIndex: () => outboundReplyIndex++,
+                  voiceSentThisTurn,
                   onWarn: (message: string) => {
                     args.api.logger?.warn?.(message);
                   },
@@ -392,7 +450,8 @@ export async function dispatchXbotInbound(args: {
               disableBlockStreaming: !effectiveReply.blockStreaming,
               shouldEmitToolResult: effectiveReply.allowTool ? () => true : undefined,
             },
-          }),
+          });
+        },
       }),
     },
   })) as {

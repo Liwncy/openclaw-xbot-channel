@@ -244,6 +244,11 @@ export function createXbotChannelPlugin(getBridge: () => XbotBridge) {
       ).trim();
       const mediaType = asString(input.type || input.kind || firstAttachment?.type || firstAttachment?.kind).trim();
       const audioAsVoice = input.audioAsVoice === true || input.asVoice === true;
+      if (audioAsVoice && !mediaUrl) {
+        throw new Error(
+          'send voice requires media (tts audio path or mediaUrl); asVoice alone is not enough',
+        );
+      }
       const bridge = getBridge();
       const result = mediaUrl
         ? await bridge.channelSendMedia({

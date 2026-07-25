@@ -6,6 +6,7 @@ import {
   filterDuplicateReplies,
   rememberRepliesSent,
 } from './outbound/send-dedupe.ts';
+import { markVoiceRecentlySent } from './outbound/voice-narrative-guard.ts';
 import type { XbotChannelConfigRoot, XbotReplyTarget, XbotRoute } from './types.ts';
 
 export type { XchatbotReply };
@@ -113,14 +114,35 @@ export async function sendViaXchatbotIfConfigured(args: {
       },
       body: JSON.stringify(buildOutboundBody({ ...args, replies })),
     });
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
+    const responseText = await response.text().catch(() => '');
+    let responseJson: {
+      ok?: boolean;
+      failedCount?: number;
+      results?: Array<{ sent?: boolean; error?: string }>;
+    } | null = null;
+    try {
+      responseJson = responseText ? JSON.parse(responseText) as typeof responseJson : null;
+    } catch {
+      responseJson = null;
+    }
+    const failedCount = Number(responseJson?.failedCount || 0);
+    const voiceErrors = (responseJson?.results || [])
+      .filter((item) => item && item.sent === false && item.error)
+      .map((item) => String(item.error))
+      .slice(0, 3);
+    if (!response.ok || responseJson?.ok === false || failedCount > 0) {
+      const detail = voiceErrors.length > 0
+        ? ` ${voiceErrors.join(' | ')}`
+        : (responseText ? ` ${responseText.slice(0, 300)}` : '');
       args.onWarn?.(
-        `[xbot] xchatbot outbound failed: HTTP ${response.status}${text ? ` ${text}` : ''}`,
+        `[xbot] xchatbot outbound failed: HTTP ${response.status} failedCount=${failedCount}${detail}`,
       );
       return false;
     }
     rememberRepliesSent({ to, replies });
+    if (replies.some((item) => item.type === 'voice')) {
+      markVoiceRecentlySent(to);
+    }
     return true;
   } catch (error) {
     args.onWarn?.(

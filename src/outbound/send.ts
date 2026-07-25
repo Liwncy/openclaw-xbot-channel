@@ -43,6 +43,9 @@ async function sendRepliesViaXchatbot(args: {
     cfg: args.cfg,
     replyTarget,
     replies: args.replies,
+    onWarn: (message) => {
+      console.warn(message);
+    },
   });
 }
 
@@ -97,9 +100,15 @@ export async function sendXbotMedia(args: {
   const route = args.route || parsed?.route;
   if (!route) throw new Error(`invalid target: ${args.to}`);
   const mediaUrl = String(args.mediaUrl || '').trim();
-  if (!mediaUrl) throw new Error('mediaUrl is required');
-
   const audioAsVoice = args.audioAsVoice === true || args.asVoice === true;
+  if (!mediaUrl) {
+    throw new Error(
+      audioAsVoice
+        ? 'send voice requires media (tts audio path or mediaUrl); asVoice alone is not enough'
+        : 'mediaUrl is required',
+    );
+  }
+
   const kind = resolveOpenClawMediaKind({
     mediaUrl,
     mimeType: args.mimeType,
