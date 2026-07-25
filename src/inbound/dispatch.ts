@@ -86,6 +86,18 @@ export async function deliverXbotReply(
   let outboundReplies = mapOpenClawPayloadToReplies(payload);
   if (outboundReplies.length === 0) return;
 
+  // 同批已带语音时，直接丢掉失败定论文本（别和语音气泡一起出去打架）。
+  if (outboundReplies.some((item) => item.type === 'voice')) {
+    const filtered = filterRepliesAfterVoiceSent(outboundReplies);
+    if (filtered.dropped > 0) {
+      deliverCtx.onWarn?.(
+        `[xbot] drop ${filtered.dropped} voice-failure text packed with voice media`,
+      );
+    }
+    outboundReplies = filtered.replies;
+    if (outboundReplies.length === 0) return;
+  }
+
   // 本轮/近期已发出语音后：丢掉「做不了 / 没发出去」定论，避免成功后又补一句失败。
   if (voiceSentFlag.value) {
     const filtered = filterRepliesAfterVoiceSent(outboundReplies);

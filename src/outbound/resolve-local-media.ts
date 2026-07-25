@@ -111,13 +111,16 @@ export async function resolveLocalMediaInReplies(replies: XchatbotReply[]): Prom
 
     const resolved = await resolveMediaId(reply.mediaId, reply.originalUrl);
     if (reply.type === 'voice') {
+      const fallbackText = resolved.originalUrl
+        ? (reply.fallbackText || `语音：${resolved.originalUrl}`)
+        : undefined;
       out.push({
-        ...reply,
+        type: 'voice',
         mediaId: resolved.mediaId,
-        originalUrl: resolved.originalUrl,
-        fallbackText: resolved.originalUrl
-          ? (reply.fallbackText || `语音：${resolved.originalUrl}`)
-          : '语音没发出去，等下再试试',
+        format: reply.format,
+        duration: reply.duration,
+        ...(resolved.originalUrl ? { originalUrl: resolved.originalUrl } : {}),
+        ...(fallbackText ? { fallbackText } : {}),
       });
       continue;
     }

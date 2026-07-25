@@ -48,6 +48,23 @@ function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+/** 拒绝 `tts:` / 裸工具名等假媒体，避免被当成相对路径读盘。 */
+export function isPlausibleMediaRef(value: string): boolean {
+  const v = asString(value);
+  if (!v || v.length < 3) return false;
+  if (/^https?:\/\//i.test(v) || /^data:/i.test(v) || /^file:/i.test(v)) return true;
+  if (/^[a-zA-Z]:[\\/]/.test(v)) return true;
+  if (v.startsWith('\\\\')) return true;
+  if (v.startsWith('/') || v.startsWith('./') || v.startsWith('../') || v.startsWith('~/') || v.startsWith('~\\')) {
+    return true;
+  }
+  if (v.includes('/') || v.includes('\\')) return true;
+  if (/\.(mp3|wav|m4a|aac|ogg|opus|flac|amr|silk|slk|png|jpe?g|gif|webp|bmp|mp4|mov|m4v|webm)(\?|#|$)/i.test(v)) {
+    return true;
+  }
+  return false;
+}
+
 function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value.trim());
 }
@@ -149,7 +166,9 @@ export function extractOpenClawMediaFromText(text: string): {
       const before = line.slice(cursor, start).trim();
       if (before) leftovers.push(before);
       const candidate = cleanMediaCandidate(match[1] || '');
-      if (candidate && !mediaUrls.includes(candidate)) mediaUrls.push(candidate);
+      if (candidate && isPlausibleMediaRef(candidate) && !mediaUrls.includes(candidate)) {
+        mediaUrls.push(candidate);
+      }
       cursor = start + match[0].length;
     }
     const after = line.slice(cursor).trim();
@@ -234,7 +253,8 @@ function mapMediaUrlToReply(params: {
         mediaId: mediaUrl,
         originalUrl: httpUrl,
         format,
-        fallbackText: httpUrl ? `语音：${httpUrl}` : '语音没发出去，等下再试试',
+        // 不预填「没发出去」：语音成功后若另一次失败，Worker 用这句会和真实语音打架
+        ...(httpUrl ? { fallbackText: `语音：${httpUrl}` } : {}),
       };
     }
     case 'audio':
@@ -298,7 +318,7 @@ export function mapOpenClawPayloadToReplies(payload: {
   const urls: string[] = [];
   const pushUrl = (value: string) => {
     const url = asString(value);
-    if (url && !urls.includes(url)) urls.push(url);
+    if (url && isPlausibleMediaRef(url) && !urls.includes(url)) urls.push(url);
   };
 
   pushUrl(asString(payload.mediaUrl));

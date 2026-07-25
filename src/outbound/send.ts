@@ -149,7 +149,10 @@ export async function sendXbotMedia(args: {
       }
       throw new Error('voice send requires xchatbot outbound for SILK conversion');
     case 'video':
-      if (!httpMedia) throw new Error('videoUrl must be an http(s) URL when xchatbot relay is unavailable');
+      // 本地 mp4 只能走 xchatbot；relay 失败时别再甩「必须是 http URL」误导
+      if (!httpMedia) {
+        throw new Error('video send via xchatbot outbound failed (local file); check Worker/WeChat CDN logs');
+      }
       result = await sendWechatVideoUrl(apiBase, receiver, mediaUrl, { caption });
       break;
     case 'audio':

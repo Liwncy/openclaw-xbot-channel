@@ -55,6 +55,9 @@ export function isVoiceFailureNarrative(text: string): boolean {
   if (/等语音通路恢复/.test(s) || /先不硬来/.test(s)) return true;
   if (/还没生成/.test(s) && /(mp3|语音|音频)/i.test(s)) return true;
   if (/发不了/.test(s) && /语音/.test(s)) return true;
+  if (/没发成/.test(s) && /语音/.test(s)) return true;
+  if (/发失败/.test(s) && /语音/.test(s)) return true;
+  if (/语音.*失败/.test(s) || /失败.*语音/.test(s)) return true;
 
   return false;
 }
