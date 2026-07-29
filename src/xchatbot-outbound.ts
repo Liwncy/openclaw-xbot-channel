@@ -28,6 +28,9 @@ type XchatbotOutboundResponse = {
   results?: Array<{ replyIndex?: number; sent?: boolean; error?: string }>;
 };
 
+/** Worker 出站 HTTP 超时；卡住时宁可 failed 进 outbox，别无限挂起 */
+const OUTBOUND_FETCH_TIMEOUT_MS = 90_000;
+
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -40,7 +43,12 @@ function resolveXchatbotApiBaseUrl(
   cfg: XbotChannelConfigRoot | null | undefined,
   replyTarget?: Pick<XbotReplyTarget, 'xchatbotApiBaseUrl'>,
 ): string {
-  return asString(replyTarget?.xchatbotApiBaseUrl || getChannelConfig(cfg).chatLogApiBaseUrl);
+  const channelCfg = getChannelConfig(cfg);
+  return asString(
+    replyTarget?.xchatbotApiBaseUrl
+    || channelCfg.chatLogApiBaseUrl
+    || channelCfg.wechatApiBaseUrl,
+  );
 }
 
 function resolveXchatbotAdminToken(
@@ -233,15 +241,31 @@ export async function sendViaXchatbotIfConfigured(args: {
       args.onWarn?.(`[xbot] outbound media kinds=${mediaKinds} count=${replies.length}`);
     }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${adminToken}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(buildOutboundBody({ ...args, replies })),
-    });
-    const responseText = await response.text().catch(() => '');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), OUTBOUND_FETCH_TIMEOUT_MS);
+    let response: Response;
+    let responseText = '';
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${adminToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(buildOutboundBody({ ...args, replies })),
+        signal: controller.signal,
+      });
+      responseText = await response.text().catch(() => '');
+    } catch (error) {
+      const aborted = controller.signal.aborted
+        || (error instanceof Error && /abort/i.test(error.message));
+      const detail = aborted
+        ? `fetch timeout after ${OUTBOUND_FETCH_TIMEOUT_MS}ms`
+        : (error instanceof Error ? error.message : String(error));
+      throw new Error(detail);
+    } finally {
+      clearTimeout(timer);
+    }
     let responseJson: XchatbotOutboundResponse | null = null;
     try {
       responseJson = responseText
@@ -258,6 +282,9 @@ export async function sendViaXchatbotIfConfigured(args: {
         .map((item) => Number(item.replyIndex))
         .filter((index) => Number.isFinite(index) && index >= 0),
     );
+    const hasIndexResults = results.some(
+      (item) => Number.isFinite(Number(item?.replyIndex)),
+    );
     const sentCount = sentIndexes.size || Number(responseJson?.sentCount || 0);
     const failedCount = Number(
       responseJson?.failedCount
@@ -267,6 +294,10 @@ export async function sendViaXchatbotIfConfigured(args: {
       .filter((item) => item && item.sent === false && item.error)
       .map((item) => String(item.error))
       .slice(0, 5);
+    // 有分项索引才精确筛未送达；部分成功但无索引时宁可不整批重入队
+    const unsentReplies = hasIndexResults
+      ? replies.filter((_, index) => !sentIndexes.has(index))
+      : (sentCount > 0 ? [] : replies);
 
     const voiceSent = replies.some(
       (item, index) => item.type === 'voice' && sentIndexes.has(index),
@@ -327,6 +358,7 @@ export async function sendViaXchatbotIfConfigured(args: {
         voiceSent,
         mediaSent,
         detail,
+        unsentReplies,
       });
     }
 
@@ -337,6 +369,7 @@ export async function sendViaXchatbotIfConfigured(args: {
       failedCount: Math.max(failedCount, replies.length),
       errors,
       detail,
+      unsentReplies,
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -347,6 +380,7 @@ export async function sendViaXchatbotIfConfigured(args: {
       failedCount: args.replies.length,
       errors: [detail],
       detail,
+      unsentReplies: args.replies,
     });
   }
 }

@@ -103,12 +103,13 @@ function backoffMs(retryCount: number): number {
 export function isRetryableOutboundError(detail: string): boolean {
   const s = detail.toLowerCase();
   if (!s) return true;
-  if (/not configured|requires xchatbot|implausible|missing media|local media missing|preflight/.test(s)) {
+  // 本地/配置类：重试无意义
+  if (/not configured|requires xchatbot|implausible|missing media|local media missing|preflight|unsupported|too large|oversized|max_.*bytes|silk|convert/.test(s)) {
     return false;
   }
   if (/http 4\d\d/.test(s) && !/http 408|http 429/.test(s)) return false;
-  return /http 5\d\d|http 408|http 429|fetch|network|timeout|econn|enotfound|socket|522|502|503|504|abort/.test(s)
-    || /failed|error|cdn|dns/.test(s);
+  // 仅网络/网关类可重试（不要用宽泛 failed|error 匹配 silk 等）
+  return /http 5\d\d|http 408|http 429|fetch failed|network|timeout|econn|enotfound|socket|522|502|503|504|abort|dns|eai_again/.test(s);
 }
 
 export async function enqueueOutboundRetry(args: {
@@ -178,6 +179,8 @@ export type OutboxDrainSender = (entry: XbotOutboxEntry) => Promise<{
   ok: boolean;
   detail?: string;
   retryable?: boolean;
+  /** partial 后只重试未送达项 */
+  nextReplies?: XchatbotReply[];
 }>;
 
 export async function drainOutboxOnce(args: {
@@ -234,6 +237,7 @@ export async function drainOutboxOnce(args: {
 
       file.pending[idx] = {
         ...entry,
+        replies: result.nextReplies?.length ? result.nextReplies : entry.replies,
         retryCount: nextRetry,
         updatedAt: Date.now(),
         nextAttemptAt: Date.now() + backoffMs(nextRetry),

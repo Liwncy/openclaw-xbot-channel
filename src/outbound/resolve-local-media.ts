@@ -3,7 +3,8 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import type { XchatbotReply } from './map-reply.ts';
 
-const MAX_LOCAL_MEDIA_BYTES = 8 * 1024 * 1024;
+/** 本地媒体内联 base64 上限；更大请改用公网 http(s) URL */
+export const MAX_LOCAL_MEDIA_BYTES = 8 * 1024 * 1024;
 
 function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value.trim());

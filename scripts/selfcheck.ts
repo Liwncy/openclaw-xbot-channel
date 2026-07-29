@@ -5,6 +5,7 @@ import {
   mapOpenClawPayloadToReplies,
 } from '../src/outbound/map-reply.ts';
 import { isAgentSuccessStage } from '../src/outbound/delivery.ts';
+import { isRetryableOutboundError } from '../src/outbound/http-outbox.ts';
 import { parseXbotParamMarker } from '../src/outbound/xbot-param.ts';
 
 function section(name: string): void {
@@ -76,5 +77,13 @@ section('delivery stages');
   assert.equal(replies.some((item) => item.type === 'text' && item.content.includes('看看')), true);
 }
 section('payload video + caption');
+
+// retryable classifier
+assert.equal(isRetryableOutboundError('HTTP 502 failedCount=1'), true);
+assert.equal(isRetryableOutboundError('fetch timeout after 90000ms'), true);
+assert.equal(isRetryableOutboundError('silk convert failed'), false);
+assert.equal(isRetryableOutboundError('local media too large: 12000KB > 8MB'), false);
+assert.equal(isRetryableOutboundError('HTTP 400 bad request'), false);
+section('retryable classifier');
 
 console.log('\nselfcheck passed');

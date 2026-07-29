@@ -1,7 +1,8 @@
-import { access } from 'node:fs/promises';
+import { access, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type { XchatbotReply } from './map-reply.ts';
+import { MAX_LOCAL_MEDIA_BYTES } from './resolve-local-media.ts';
 
 const PROBE_TIMEOUT_MS = 4_000;
 
@@ -91,6 +92,13 @@ async function preflightOne(reply: XchatbotReply): Promise<{ ok: boolean; reason
     const localPath = normalizeLocalPath(primary);
     try {
       await access(localPath);
+      const info = await stat(localPath);
+      if (info.size > MAX_LOCAL_MEDIA_BYTES) {
+        return {
+          ok: false,
+          reason: `local media too large: ${Math.round(info.size / 1024)}KB > ${Math.round(MAX_LOCAL_MEDIA_BYTES / 1024 / 1024)}MB (use public http URL)`,
+        };
+      }
       return { ok: true };
     } catch {
       return { ok: false, reason: `local media missing: ${localPath}` };

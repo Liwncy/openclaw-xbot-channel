@@ -14,7 +14,7 @@ OpenClaw 的 **xchatbot 微信频道**插件（`channelId=xbot`）。
          → 微信回复（文本 / 图片 / 语音 / 视频；文件降级为链接卡片）
 ```
 
-出站媒体按 URL 后缀、`mimeType`、`audioAsVoice` 自动分类；会解析文本里的 `MEDIA:<本地路径或URL>`，并把本机音频读成 base64 后按**语音气泡**发出（Agent 主路径走 xchatbot，含 SILK 转换）。工具直发仍走微信网关（需可公网访问的 URL）。
+出站媒体按 URL 后缀、`mimeType`、`audioAsVoice` / `MEDIA` 标记自动分类；本机音频会读成 base64 并尽量转成 SILK，经 xchatbot `/admin/xbot/outbound` 发成**语音气泡**。本地文件内联上限 **8MB**；更大的视频/文件请用公网 `http(s)` URL（Worker 走 CDN/`sendVideo`）。
 
 与 `agent-bridge` 插件的区别：
 
@@ -73,10 +73,45 @@ openclaw gateway restart
 | `injectChatContext` | 触发 OpenClaw 时是否注入 D1 近期聊天上下文（默认 `true`） |
 | `contextHistoryLimit` | 注入的近期消息条数上限（默认 `20`） |
 | `contextMaxChars` | 注入上下文总字数上限（默认 `4000`） |
-| `chatLogApiBaseUrl` | 查 D1 的 xchatbot 根地址；默认复用 `wechatApiBaseUrl` |
-| `chatLogAdminToken` | 查 D1 用的 Bearer Token（与 Worker `ADMIN_TOKEN` 一致）；入站也会透传 token，可不填 |
+| `chatLogApiBaseUrl` | xchatbot 根地址（出站 `/admin/xbot/outbound` + 查 D1）；默认回退 `wechatApiBaseUrl` |
+| `chatLogAdminToken` | Worker `ADMIN_TOKEN`；**出站必填**（或靠入站 connect 透传到 replyTarget） |
 | `blockStreaming` | 是否把中间回复发到微信（如调技能前的说明），默认 `true` |
 | `allowTool` | 是否把 tool 结果也发到微信，默认 `false` |
+
+### 出站可靠性
+
+统一管线：`preflight → xchatbot outbound →（可重试失败）HTTP outbox`。
+
+投递阶段（对 Agent/工具诚实，只有前两种算成功）：
+
+| stage | 含义 |
+|-------|------|
+| `wechat-ok` | 本批全部送达 |
+| `deduped` | 短时重复，跳过 |
+| `partial` | 部分送达；未送达项可入 outbox 重试 |
+| `queued` | 同步失败已入队，后台重试 |
+| `failed` | 全部失败或本地预处理失败 |
+| `unconfigured` | 未配 Worker；仅文本/公网图视频可直连 |
+
+状态目录：`~/.openclaw/xbot/outbox.json`（pending / dead-letter）。
+
+```bash
+openclaw gateway call xbot.diagnostics
+```
+
+### MEDIA / XbotParam
+
+文本里可夹媒体标记（会被剥掉再当 caption）：
+
+```text
+MEDIA:C:\tmp\a.jpg
+MEDIA:voice|C:\tmp\v.mp3
+MEDIA:video:https://cdn.example.com/clip.mp4
+[[audio_as_voice]]
+[XbotParam:{"asVoice":true,"type":"voice","path":"C:\\tmp\\v.mp3"}]
+```
+
+`voice` / `asVoice` → 语音气泡；大文件请给公网 URL，不要塞本地超大路径。
 
 ### 近期聊天上下文
 
@@ -195,6 +230,16 @@ Worker 启动或定时心跳时调用，登记推送端在线状态。
 
 可选心跳，刷新连接 `lastActivityAt`。
 
+### `xbot.diagnostics`
+
+查看桥接状态与 outbox：
+
+```bash
+openclaw gateway call xbot.diagnostics
+```
+
+返回字段含 `bridgeId`、`connections`、`replyTargets`、`outbox.pending` / `deadLetter` 及预览。
+
 ## xchatbot 侧对接
 
 在 xchatbot Worker 环境变量中配置：
@@ -218,6 +263,7 @@ XBOT_CHANNEL_GATEWAY_TOKEN=<gateway-token>
 ```bash
 npm install
 npm run typecheck
+npm run selfcheck
 npm run build
 ```
 

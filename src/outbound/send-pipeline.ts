@@ -89,24 +89,28 @@ export async function sendRepliesPipeline(args: {
       && (relayed.stage === 'failed' || relayed.stage === 'partial')
       && isRetryableOutboundError(relayed.detail || relayed.errors.join(' '))
     ) {
-      // 仅对尚未送达的条目重试：简单起见整批重试（dedupe 会跳过已发媒体）
-      const queued = await enqueueOutboundRetry({
-        accountId: normalizeAccountId(args.accountId || replyTarget.accountId),
-        replyTarget,
-        replies: preflight.replies,
-        lastError: relayed.detail || relayed.errors[0] || relayed.stage,
-        onWarn: args.onWarn,
-      });
-      if (queued && relayed.stage === 'failed') {
-        return buildOutboundResult({
-          stage: 'queued',
-          messageId: queued.id,
-          failedCount: relayed.failedCount,
-          errors: relayed.errors,
-          voiceSent: relayed.voiceSent,
-          mediaSent: relayed.mediaSent,
-          detail: `queued for retry: ${relayed.detail || relayed.stage}`,
+      const retryReplies = relayed.unsentReplies?.length
+        ? relayed.unsentReplies
+        : (relayed.stage === 'failed' ? preflight.replies : []);
+      if (retryReplies.length > 0) {
+        const queued = await enqueueOutboundRetry({
+          accountId: normalizeAccountId(args.accountId || replyTarget.accountId),
+          replyTarget,
+          replies: retryReplies,
+          lastError: relayed.detail || relayed.errors[0] || relayed.stage,
+          onWarn: args.onWarn,
         });
+        if (queued && relayed.stage === 'failed') {
+          return buildOutboundResult({
+            stage: 'queued',
+            messageId: queued.id,
+            failedCount: relayed.failedCount,
+            errors: relayed.errors,
+            voiceSent: relayed.voiceSent,
+            mediaSent: relayed.mediaSent,
+            detail: `queued for retry: ${relayed.detail || relayed.stage}`,
+          });
+        }
       }
     }
     if (relayed.stage === 'failed' || relayed.stage === 'partial') {

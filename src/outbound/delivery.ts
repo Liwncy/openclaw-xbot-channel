@@ -1,3 +1,5 @@
+import type { XchatbotReply } from './map-reply.ts';
+
 /**
  * 出站投递阶段：对模型/工具诚实，禁止「失败也 ok:true」。
  *
@@ -28,6 +30,8 @@ export type XbotOutboundResult = {
   voiceSent: boolean;
   mediaSent: boolean;
   detail?: string;
+  /** 尚未送达、可供 outbox 重试的条目（有索引结果时才填） */
+  unsentReplies?: XchatbotReply[];
 };
 
 export function isAgentSuccessStage(stage: XbotDeliveryStage): boolean {
@@ -50,6 +54,7 @@ export function buildOutboundResult(args: {
   voiceSent?: boolean;
   mediaSent?: boolean;
   detail?: string;
+  unsentReplies?: XchatbotReply[];
 }): XbotOutboundResult {
   const stage = args.stage;
   return {
@@ -62,5 +67,6 @@ export function buildOutboundResult(args: {
     voiceSent: args.voiceSent === true,
     mediaSent: args.mediaSent === true,
     detail: args.detail,
+    ...(args.unsentReplies?.length ? { unsentReplies: args.unsentReplies } : {}),
   };
 }

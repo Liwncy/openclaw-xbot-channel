@@ -107,14 +107,23 @@ export class XbotBridge {
           skipOutboxEnqueue: true,
           onWarn: (message) => this.api.logger?.warn?.(message),
         });
-        if (result.ok || result.stage === 'deduped' || (result.stage === 'partial' && result.mediaSent)) {
+        // 仅整批成功 / 去重才出队；partial 必须带着未送达项继续重试
+        if (result.ok || result.stage === 'deduped' || result.stage === 'wechat-ok') {
           this.lastOutboundAt = Date.now();
           return { ok: true };
+        }
+        if (result.stage === 'partial' && !result.unsentReplies?.length) {
+          return {
+            ok: false,
+            detail: result.detail || 'partial without unsent indexes',
+            retryable: false,
+          };
         }
         return {
           ok: false,
           detail: result.detail || result.errors[0] || result.stage,
           retryable: result.stage === 'failed' || result.stage === 'partial',
+          nextReplies: result.unsentReplies,
         };
       },
     });
