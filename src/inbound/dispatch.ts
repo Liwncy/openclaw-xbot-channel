@@ -325,7 +325,11 @@ export async function dispatchXbotInbound(args: {
   const inboundMediaUrl = silentHistoryFlush ? '' : String(parsed.mediaUrl || '').trim();
   const inboundMediaKind = silentHistoryFlush
     ? 'image'
-    : (parsed.mediaKind === 'video' || parsed.mediaKind === 'emoji' || parsed.mediaKind === 'image'
+    : (parsed.mediaKind === 'video'
+      || parsed.mediaKind === 'emoji'
+      || parsed.mediaKind === 'image'
+      || parsed.mediaKind === 'voice'
+      || parsed.mediaKind === 'audio'
       ? parsed.mediaKind
       : 'image');
   const inboundMedia = inboundMediaUrl
@@ -336,8 +340,14 @@ export async function dispatchXbotInbound(args: {
           ? 'video/mp4'
           : inboundMediaKind === 'emoji'
             ? 'image/gif'
-            : 'image/jpeg',
-        kind: (inboundMediaKind === 'video' ? 'video' : 'image') as 'image' | 'video',
+            : (inboundMediaKind === 'voice' || inboundMediaKind === 'audio')
+              ? 'audio/silk'
+              : 'image/jpeg',
+        kind: (inboundMediaKind === 'video'
+          ? 'video'
+          : (inboundMediaKind === 'voice' || inboundMediaKind === 'audio')
+            ? 'audio'
+            : 'image') as 'image' | 'video' | 'audio',
         messageId: parsed.messageId,
       }]
     : undefined;

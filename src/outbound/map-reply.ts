@@ -1,4 +1,8 @@
 import { normalizeWechatOutboundText } from './normalize-text.ts';
+import {
+  collectPathsFromXbotParams,
+  parseXbotParamMarker,
+} from './xbot-param.ts';
 
 export type XchatbotReply =
   | { type: 'text'; content: string }
@@ -31,6 +35,12 @@ export type XchatbotReply =
 
 export type OpenClawMediaKind = 'image' | 'video' | 'voice' | 'audio' | 'file';
 
+export type ExtractedMediaItem = {
+  url: string;
+  hintedType?: OpenClawMediaKind;
+  audioAsVoice?: boolean;
+};
+
 const IMAGE_EXT = new Set([
   'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif', 'avif', 'tif', 'tiff',
 ]);
@@ -43,6 +53,7 @@ const AUDIO_EXT = new Set([
 
 const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
 const AUDIO_AS_VOICE_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
+const MEDIA_KIND_PREFIX_RE = /^(voice|audio|video|image|file)\s*[|:]\s*(.+)$/i;
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -128,63 +139,121 @@ function cleanMediaCandidate(raw: string): string {
     .trim();
 }
 
+function parseMediaTokenBody(raw: string): ExtractedMediaItem | null {
+  const candidate = cleanMediaCandidate(raw);
+  if (!candidate) return null;
+
+  const typed = candidate.match(MEDIA_KIND_PREFIX_RE);
+  if (typed) {
+    const kind = typed[1].toLowerCase() as OpenClawMediaKind;
+    const url = cleanMediaCandidate(typed[2] || '');
+    if (!url || !isPlausibleMediaRef(url)) return null;
+    return {
+      url,
+      hintedType: kind === 'audio' ? 'voice' : kind,
+      audioAsVoice: kind === 'voice' || kind === 'audio',
+    };
+  }
+
+  if (!isPlausibleMediaRef(candidate)) return null;
+  return {
+    url: candidate,
+    audioAsVoice: looksLikeVoiceFileName(candidate),
+  };
+}
+
 /**
- * 从 OpenClaw 文本里抽出 `MEDIA:<path-or-url>`，并剥离 `[[audio_as_voice]]`。
+ * 从 OpenClaw 文本里抽出媒体：
+ * - `MEDIA:<path-or-url>`
+ * - `MEDIA:voice|<path>` / `MEDIA:video:C:\a.mp4`
+ * - `[[audio_as_voice]]`
+ * - `[XbotParam:{"asVoice":true,"path":"..."}]`
  */
 export function extractOpenClawMediaFromText(text: string): {
   text: string;
   mediaUrls: string[];
+  mediaItems: ExtractedMediaItem[];
   audioAsVoice: boolean;
+  hintedType?: OpenClawMediaKind;
 } {
   const raw = typeof text === 'string' ? text : '';
-  let audioAsVoice = AUDIO_AS_VOICE_TAG_RE.test(raw);
+  const paramParsed = parseXbotParamMarker(raw);
+  const params = paramParsed.params;
+  let audioAsVoice = AUDIO_AS_VOICE_TAG_RE.test(paramParsed.cleanText)
+    || params.asVoice === true
+    || params.audioAsVoice === true;
   AUDIO_AS_VOICE_TAG_RE.lastIndex = 0;
-  const withoutAudioTag = raw.replace(AUDIO_AS_VOICE_TAG_RE, '').trimEnd();
+  const withoutAudioTag = paramParsed.cleanText.replace(AUDIO_AS_VOICE_TAG_RE, '').trimEnd();
 
-  if (!/media:/i.test(withoutAudioTag)) {
-    return { text: withoutAudioTag.trim(), mediaUrls: [], audioAsVoice };
+  const mediaItems: ExtractedMediaItem[] = [];
+  const pushItem = (item: ExtractedMediaItem | null) => {
+    if (!item?.url) return;
+    if (mediaItems.some((existing) => existing.url === item.url)) return;
+    mediaItems.push(item);
+    if (item.audioAsVoice) audioAsVoice = true;
+  };
+
+  const paramType = asString(params.type).toLowerCase();
+  const paramHinted: OpenClawMediaKind | undefined = (
+    paramType === 'voice'
+    || paramType === 'audio'
+    || paramType === 'video'
+    || paramType === 'image'
+    || paramType === 'file'
+  )
+    ? (paramType === 'audio' ? 'voice' : paramType)
+    : undefined;
+
+  for (const path of collectPathsFromXbotParams(params)) {
+    pushItem({
+      url: path,
+      hintedType: paramHinted,
+      audioAsVoice: audioAsVoice || paramHinted === 'voice',
+    });
   }
 
-  const mediaUrls: string[] = [];
   const keptLines: string[] = [];
-  for (const line of withoutAudioTag.split(/\r?\n/)) {
-    const trimmedStart = line.trimStart();
-    if (!trimmedStart.toUpperCase().startsWith('MEDIA:')) {
-      keptLines.push(line);
-      continue;
-    }
-    const matches = Array.from(line.matchAll(MEDIA_TOKEN_RE));
-    MEDIA_TOKEN_RE.lastIndex = 0;
-    if (matches.length === 0) {
-      keptLines.push(line);
-      continue;
-    }
-    let cursor = 0;
-    const leftovers: string[] = [];
-    for (const match of matches) {
-      const start = match.index ?? 0;
-      const before = line.slice(cursor, start).trim();
-      if (before) leftovers.push(before);
-      const candidate = cleanMediaCandidate(match[1] || '');
-      if (candidate && isPlausibleMediaRef(candidate) && !mediaUrls.includes(candidate)) {
-        mediaUrls.push(candidate);
+  if (/media:/i.test(withoutAudioTag)) {
+    for (const line of withoutAudioTag.split(/\r?\n/)) {
+      const trimmedStart = line.trimStart();
+      if (!trimmedStart.toUpperCase().startsWith('MEDIA:')) {
+        keptLines.push(line);
+        continue;
       }
-      cursor = start + match[0].length;
+      const matches = Array.from(line.matchAll(MEDIA_TOKEN_RE));
+      MEDIA_TOKEN_RE.lastIndex = 0;
+      if (matches.length === 0) {
+        keptLines.push(line);
+        continue;
+      }
+      let cursor = 0;
+      const leftovers: string[] = [];
+      for (const match of matches) {
+        const start = match.index ?? 0;
+        const before = line.slice(cursor, start).trim();
+        if (before) leftovers.push(before);
+        pushItem(parseMediaTokenBody(match[1] || ''));
+        cursor = start + match[0].length;
+      }
+      const after = line.slice(cursor).trim();
+      if (after) leftovers.push(after);
+      if (leftovers.length > 0) keptLines.push(leftovers.join(' ').trim());
     }
-    const after = line.slice(cursor).trim();
-    if (after) leftovers.push(after);
-    if (leftovers.length > 0) keptLines.push(leftovers.join(' ').trim());
+  } else {
+    keptLines.push(withoutAudioTag);
   }
 
   // TTS / outbound 语音文件即使没带标签，也按语音发
-  if (!audioAsVoice && mediaUrls.some((url) => looksLikeVoiceFileName(url))) {
+  if (!audioAsVoice && mediaItems.some((item) => looksLikeVoiceFileName(item.url))) {
     audioAsVoice = true;
   }
 
   return {
     text: keptLines.join('\n').trim(),
-    mediaUrls,
+    mediaUrls: mediaItems.map((item) => item.url),
+    mediaItems,
     audioAsVoice,
+    hintedType: paramHinted,
   };
 }
 
@@ -314,27 +383,47 @@ export function mapOpenClawPayloadToReplies(payload: {
   const audioAsVoice = payload.audioAsVoice === true
     || payload.asVoice === true
     || extracted.audioAsVoice;
+  const payloadHint = asString(payload.type || payload.kind) || extracted.hintedType;
 
-  const urls: string[] = [];
-  const pushUrl = (value: string) => {
-    const url = asString(value);
-    if (url && isPlausibleMediaRef(url) && !urls.includes(url)) urls.push(url);
+  const items: ExtractedMediaItem[] = [];
+  const pushItem = (item: ExtractedMediaItem) => {
+    if (!item.url || !isPlausibleMediaRef(item.url)) return;
+    if (items.some((existing) => existing.url === item.url)) return;
+    items.push(item);
   };
 
-  pushUrl(asString(payload.mediaUrl));
-  for (const item of Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []) {
-    pushUrl(asString(item));
+  const payloadUrl = asString(payload.mediaUrl);
+  if (payloadUrl) {
+    pushItem({
+      url: payloadUrl,
+      hintedType: payloadHint as OpenClawMediaKind | undefined,
+      audioAsVoice,
+    });
   }
-  for (const item of extracted.mediaUrls) {
-    pushUrl(item);
+  for (const item of Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []) {
+    const url = asString(item);
+    if (url) {
+      pushItem({
+        url,
+        hintedType: payloadHint as OpenClawMediaKind | undefined,
+        audioAsVoice,
+      });
+    }
+  }
+  for (const item of extracted.mediaItems) {
+    pushItem({
+      ...item,
+      audioAsVoice: item.audioAsVoice === true || audioAsVoice,
+      hintedType: item.hintedType || (payloadHint as OpenClawMediaKind | undefined),
+    });
   }
 
-  const replies: XchatbotReply[] = urls.map((mediaUrl) => mapMediaUrlToReply({
-    mediaUrl,
+  const replies: XchatbotReply[] = items.map((item) => mapMediaUrlToReply({
+    mediaUrl: item.url,
     mimeType: payload.mimeType,
     fileName: payload.fileName,
-    hintedType: payload.type || payload.kind,
-    audioAsVoice,
+    hintedType: item.hintedType || payloadHint,
+    audioAsVoice: item.audioAsVoice === true || audioAsVoice,
   }));
 
   const normalizedText = normalizeWechatOutboundText(text);

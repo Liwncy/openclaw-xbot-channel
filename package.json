@@ -19,7 +19,8 @@
   ],
   "scripts": {
     "build": "npx -y esbuild@0.28.0 index.ts --bundle --platform=node --format=esm --target=node22 --packages=external --outfile=dist/index.js",
-    "typecheck": "node ./node_modules/typescript/lib/tsc.js -p tsconfig.typecheck.json"
+    "typecheck": "node ./node_modules/typescript/lib/tsc.js -p tsconfig.typecheck.json",
+    "selfcheck": "npx -y esbuild@0.28.0 scripts/selfcheck.ts --bundle --platform=node --format=esm --target=node22 --packages=external --outfile=.tmp/selfcheck.js && node .tmp/selfcheck.js"
   },
   "peerDependencies": {
     "openclaw": ">=2026.5.27"

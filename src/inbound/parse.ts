@@ -87,8 +87,12 @@ export function parseXbotInboundParams(
   const mediaUrl = asString(input.mediaUrl || input.media || input.imageUrl).trim();
   const mediaKindRaw = asString(input.mediaKind || input.mediaType).trim().toLowerCase();
   const mediaKind =
-    mediaKindRaw === 'video' || mediaKindRaw === 'emoji' || mediaKindRaw === 'image'
-      ? mediaKindRaw as 'image' | 'video' | 'emoji'
+    mediaKindRaw === 'video'
+    || mediaKindRaw === 'emoji'
+    || mediaKindRaw === 'image'
+    || mediaKindRaw === 'voice'
+    || mediaKindRaw === 'audio'
+      ? (mediaKindRaw === 'audio' ? 'voice' : mediaKindRaw) as 'image' | 'video' | 'emoji' | 'voice'
       : undefined;
   const timestampRaw = Number(input.timestamp ?? input.ts ?? Date.now());
   const timestamp =

@@ -68,7 +68,7 @@ export type ParsedXbotInbound = {
   /** Public downloadable media URL resolved by xchatbot (image/emoji/video; may be cover on fallback). */
   mediaUrl?: string;
   /** Media kind corresponding to mediaUrl. */
-  mediaKind?: 'image' | 'video' | 'emoji';
+  mediaKind?: 'image' | 'video' | 'emoji' | 'voice';
   senderId: string;
   senderName: string;
   botMentioned: boolean;
