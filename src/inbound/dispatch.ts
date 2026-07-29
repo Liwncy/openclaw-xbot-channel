@@ -24,7 +24,9 @@ import {
 } from './group-history.ts';
 import { decideXbotInboundTurn } from './turn-decision.ts';
 import { loadInjectedChatContextBody } from './chat-context.ts';
+import { formatOutboundFailure } from '../outbound/delivery.ts';
 import { mapOpenClawPayloadToReplies } from '../outbound/map-reply.ts';
+import { sendRepliesPipeline } from '../outbound/send-pipeline.ts';
 import {
   filterRepliesAfterVoiceSent,
   shouldHoldVoiceFailureNarrative,
@@ -32,7 +34,6 @@ import {
 } from '../outbound/voice-narrative-guard.ts';
 import { resolveOutboundReceiver } from '../targets.ts';
 import type { ParsedXbotInbound, XbotChannelConfigRoot, XbotReplyTarget } from '../types.ts';
-import { sendViaXchatbotIfConfigured } from '../xchatbot-outbound.ts';
 
 export type XbotDeliverContext = {
   cfg: XbotChannelConfigRoot;
@@ -42,6 +43,8 @@ export type XbotDeliverContext = {
   onWarn?: (message: string) => void;
   /** 本轮入站回复内是否已成功发出过语音（可变，跨多次 deliver 共享）。 */
   voiceSentThisTurn?: { value: boolean };
+  /** 本轮是否已有媒体真实送达（含图片/视频/语音）。 */
+  mediaSentThisTurn?: { value: boolean };
 };
 
 export type XbotDispatchResult = {
@@ -75,12 +78,15 @@ export async function deliverXbotReply(
   // OpenClaw 常把语音只挂在 block/tool 上，final 只剩「发过去了」文字；丢掉媒体会导致微信完全看不到语音。
   // 重复投递靠 send-dedupe（同媒体 45s 内只发一次；文字仍可发）。
   const voiceSentFlag = deliverCtx.voiceSentThisTurn || { value: false };
+  const mediaSentFlag = deliverCtx.mediaSentThisTurn || { value: false };
   deliverCtx.voiceSentThisTurn = voiceSentFlag;
+  deliverCtx.mediaSentThisTurn = mediaSentFlag;
   const to = deliverCtx.replyTarget.route.groupId
     || deliverCtx.replyTarget.route.userId
     || deliverCtx.replyTarget.to;
   if (wasVoiceRecentlySent(to)) {
     voiceSentFlag.value = true;
+    mediaSentFlag.value = true;
   }
 
   let outboundReplies = mapOpenClawPayloadToReplies(payload);
@@ -109,7 +115,7 @@ export async function deliverXbotReply(
     outboundReplies = filtered.replies;
     if (outboundReplies.length === 0) return;
   } else {
-    // 语音尚未成功：中间 block 上的失败定论先扣住，等 final；避免先说做不了再出语音。
+    // 语音尚未成功：失败定论先扣住；仅 final 且整轮仍失败时才放行。
     const held: typeof outboundReplies = [];
     const kept: typeof outboundReplies = [];
     for (const reply of outboundReplies) {
@@ -119,6 +125,7 @@ export async function deliverXbotReply(
           kind: info?.kind,
           voiceSentThisTurn: false,
           text: reply.content || '',
+          allowFinalFailureNarrative: info?.kind === 'final',
         })
       ) {
         held.push(reply);
@@ -128,26 +135,40 @@ export async function deliverXbotReply(
     }
     if (held.length > 0) {
       deliverCtx.onWarn?.(
-        `[xbot] hold ${held.length} early voice-failure text until final (or drop if voice succeeds)`,
+        `[xbot] hold ${held.length} voice-failure text until media outcome is settled`,
       );
     }
     outboundReplies = kept;
     if (outboundReplies.length === 0) return;
   }
 
-  const relayedByXchatbot = await sendViaXchatbotIfConfigured({
+  const outbound = await sendRepliesPipeline({
     cfg: deliverCtx.cfg,
+    accountId: deliverCtx.replyTarget.accountId,
+    route: deliverCtx.replyTarget.route,
     replyTarget: deliverCtx.replyTarget,
     replies: outboundReplies,
+    wechatApiBaseUrl: deliverCtx.wechatApiBaseUrl,
     onWarn: deliverCtx.onWarn,
   });
-  if (!relayedByXchatbot) {
-    throw new Error('xchatbot outbound relay is not configured or failed');
-  }
 
-  if (outboundReplies.some((item) => item.type === 'voice')) {
-    voiceSentFlag.value = true;
+  if (outbound.voiceSent) voiceSentFlag.value = true;
+  if (outbound.mediaSent || outbound.voiceSent) mediaSentFlag.value = true;
+
+  // 部分成功：媒体到了就别整轮抛错（用户已看到气泡）；纯失败 / queued 才抛
+  if (outbound.stage === 'wechat-ok' || outbound.stage === 'deduped') return;
+  if (outbound.stage === 'partial' && (outbound.mediaSent || outbound.voiceSent)) {
+    deliverCtx.onWarn?.(
+      `[xbot] outbound partial but media delivered: ${formatOutboundFailure(outbound)}`,
+    );
+    return;
   }
+  if (outbound.stage === 'queued') {
+    deliverCtx.onWarn?.(
+      `[xbot] outbound queued for retry: ${formatOutboundFailure(outbound)}`,
+    );
+  }
+  throw new Error(formatOutboundFailure(outbound));
 }
 
 export async function dispatchXbotInbound(args: {
@@ -425,6 +446,7 @@ export async function dispatchXbotInbound(args: {
         },
         runDispatch: async () => {
           const voiceSentThisTurn = { value: false };
+          const mediaSentThisTurn = { value: false };
           return dispatchOpenClawReplyWithBufferedBlockDispatcher(api, {
             ctx: ctxPayload,
             cfg: effectiveReply.replyCfg,
@@ -447,6 +469,7 @@ export async function dispatchXbotInbound(args: {
                   replyTarget,
                   allocateReplyIndex: () => outboundReplyIndex++,
                   voiceSentThisTurn,
+                  mediaSentThisTurn,
                   onWarn: (message: string) => {
                     args.api.logger?.warn?.(message);
                   },

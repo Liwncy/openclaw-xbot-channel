@@ -81,15 +81,21 @@ export function filterRepliesAfterVoiceSent<T extends { type: string; content?: 
 }
 
 /**
- * 语音还没成功发出时：中间 block 上的失败定论先不发，避免「先说做不了再出语音」。
- * final 仍放行（若最终真失败需要那句短回）。
+ * 语音还没成功发出时：失败定论先扣住。
+ * - block/tool：一律扣
+ * - final：仅当本轮明确允许失败旁白（整轮媒体都失败）才放行
  */
 export function shouldHoldVoiceFailureNarrative(args: {
   kind?: 'tool' | 'block' | 'final';
   voiceSentThisTurn: boolean;
   text: string;
+  /** final 且整轮确认失败时为 true，才放行「没发出去」 */
+  allowFinalFailureNarrative?: boolean;
 }): boolean {
   if (args.voiceSentThisTurn) return false;
-  if (args.kind === 'final') return false;
-  return isVoiceFailureNarrative(args.text);
+  if (!isVoiceFailureNarrative(args.text)) return false;
+  if (args.kind === 'final') {
+    return args.allowFinalFailureNarrative !== true;
+  }
+  return true;
 }

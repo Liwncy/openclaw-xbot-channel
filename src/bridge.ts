@@ -13,7 +13,15 @@ import type { XbotGroupHistoryMap } from './inbound/group-history.ts';
 import { parseXbotInboundParams } from './inbound/parse.ts';
 import { getOpenClawRuntimeConfig } from './openclaw/config.ts';
 import { resolveOpenClawAgentRoute } from './openclaw/runtime.ts';
+import {
+  getOutboxDiagnostics,
+  peekOutboxCounts,
+  startOutboxDrainLoop,
+  stopOutboxDrainLoop,
+} from './outbound/http-outbox.ts';
+import { loadReplyTargetsInto } from './outbound/reply-target-store.ts';
 import { rememberReplyTarget, resolveReplyTargetBySession, sendXbotMedia, sendXbotText } from './outbound/send.ts';
+import { sendRepliesPipeline } from './outbound/send-pipeline.ts';
 import { resolveXbotChannelPolicy } from './policy.ts';
 import { callGatewayFromCli } from 'openclaw/plugin-sdk/gateway-runtime';
 import type { XbotChannelConfigRoot, XbotConnection, XbotReplyTarget } from './types.ts';
@@ -62,6 +70,8 @@ export class XbotBridge {
   /** 群聊 pending 历史（未点名时攒着，点名触发时注入上下文） */
   private readonly groupHistories: XbotGroupHistoryMap = new Map();
   private runtimeWechatApiBaseUrl = '';
+  private bootstrapped = false;
+  private lastOutboundAt: number | null = null;
 
   constructor(api: OpenClawPluginApi) {
     this.api = api;
@@ -70,6 +80,49 @@ export class XbotBridge {
   getBridgeId(): string {
     return this.bridgeId;
   }
+
+  /** 加载持久化 replyTarget，并启动 outbox drain */
+  start = async () => {
+    if (this.bootstrapped) return;
+    this.bootstrapped = true;
+    try {
+      const loaded = await loadReplyTargetsInto(this.replyTargets);
+      if (loaded > 0) {
+        this.api.logger?.info?.(`[xbot] restored ${loaded} reply target(s) from disk`);
+      }
+    } catch (error) {
+      this.api.logger?.warn?.(
+        `[xbot] load reply targets failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    startOutboxDrainLoop({
+      onWarn: (message) => this.api.logger?.warn?.(message),
+      send: async (entry) => {
+        const result = await sendRepliesPipeline({
+          cfg: this.cfg(),
+          accountId: entry.accountId,
+          route: entry.replyTarget.route,
+          replyTarget: entry.replyTarget,
+          replies: entry.replies,
+          skipOutboxEnqueue: true,
+          onWarn: (message) => this.api.logger?.warn?.(message),
+        });
+        if (result.ok || result.stage === 'deduped' || (result.stage === 'partial' && result.mediaSent)) {
+          this.lastOutboundAt = Date.now();
+          return { ok: true };
+        }
+        return {
+          ok: false,
+          detail: result.detail || result.errors[0] || result.stage,
+          retryable: result.stage === 'failed' || result.stage === 'partial',
+        };
+      },
+    });
+  };
+
+  stop = async () => {
+    stopOutboxDrainLoop();
+  };
 
   private cfg(): XbotChannelConfigRoot {
     return getOpenClawRuntimeConfig(this.api);
@@ -120,6 +173,18 @@ export class XbotBridge {
     const connection = connId ? this.connections.get(connId) : undefined;
     if (connection) connection.lastActivityAt = Date.now();
     respond(true, { ok: true, bridgeId: this.bridgeId, connId: connId || null });
+  };
+
+  handleDiagnostics = async ({ respond }: GatewayContext) => {
+    const outbox = await getOutboxDiagnostics();
+    respond(true, {
+      ok: true,
+      bridgeId: this.bridgeId,
+      connections: this.connections.size,
+      replyTargets: this.replyTargets.size,
+      lastOutboundAt: this.lastOutboundAt,
+      outbox,
+    });
   };
 
   handleInbound = async ({ params, respond }: GatewayContext) => {
@@ -320,6 +385,7 @@ export class XbotBridge {
     const cfg = this.cfg();
     const policy = resolveXbotChannelPolicy(cfg?.channels?.[CHANNEL_ID]);
     const connected = this.connections.size > 0;
+    const outbox = peekOutboxCounts();
     return {
       channel: CHANNEL_ID,
       enabled: policy.enabled,
@@ -328,6 +394,11 @@ export class XbotBridge {
       wechatApiBaseUrl: this.resolveApiBaseUrl() || null,
       botName: resolveBotWechatName(cfg),
       defaultAccountId: normalizeAccountId(defaultAccountId),
+      lastOutboundAt: this.lastOutboundAt,
+      pending: outbox.pending,
+      deadLetter: outbox.deadLetter,
+      lastOutboundError: outbox.lastOutboundError || null,
+      lastSilkError: outbox.lastSilkError || null,
     };
   };
 
@@ -339,7 +410,7 @@ export class XbotBridge {
       accountId: normalized,
       connected: related.length > 0,
       lastInboundAt: latest?.lastActivityAt || null,
-      lastOutboundAt: null,
+      lastOutboundAt: this.lastOutboundAt,
       mode: 'push',
     };
   };

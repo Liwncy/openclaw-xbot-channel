@@ -267,7 +267,17 @@ export function createXbotChannelPlugin(getBridge: () => XbotBridge) {
             to,
             text: message,
           });
-      return jsonResult({ ok: true, ...result, messageId: result.messageId || randomUUID() });
+      // sendXbot* 失败会抛错；到这里必是 wechat-ok / deduped
+      return jsonResult({
+        ok: result.ok !== false,
+        deliveryStage: result.deliveryStage || 'wechat-ok',
+        sentCount: result.sentCount,
+        failedCount: result.failedCount,
+        errors: result.errors,
+        voiceSent: result.voiceSent,
+        mediaSent: result.mediaSent,
+        messageId: result.messageId || randomUUID(),
+      });
     },
   };
 

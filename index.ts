@@ -47,8 +47,12 @@ const plugin = {
     if (!runtime.serviceRegistered) {
       api.registerService({
         id: 'xbot-bridge-service',
-        start: async () => {},
-        stop: async () => {},
+        start: async () => {
+          await getCurrentBridge(api).start();
+        },
+        stop: async () => {
+          await getCurrentBridge(api).stop();
+        },
       });
       runtime.serviceRegistered = true;
     }
@@ -66,11 +70,15 @@ const plugin = {
           if (method === 'xbot.connect') return bridge.handleConnect(opts);
           if (method === 'xbot.inbound') return bridge.handleInbound(opts);
           if (method === 'xbot.activity') return bridge.handleActivity(opts);
+          if (method === 'xbot.diagnostics') return bridge.handleDiagnostics(opts);
           opts.respond(false, { ok: false, error: `unsupported method: ${method}` });
         });
       }
       runtime.methodsRegistered = true;
     }
+
+    // registerService start 可能晚于首条消息；这里也主动 bootstrap 一次
+    void bridge.start();
 
     registerXbotHttpRoutes(api, () => getCurrentBridge(api));
   },

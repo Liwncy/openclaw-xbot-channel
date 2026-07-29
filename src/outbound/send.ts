@@ -1,52 +1,52 @@
 import { randomUUID } from 'node:crypto';
 import type { ChannelMessageSendResult } from 'openclaw/plugin-sdk/channel-message';
 import { createMessageReceiptFromOutboundResults } from 'openclaw/plugin-sdk/channel-outbound';
-import { normalizeAccountId, resolveWechatApiBaseUrl } from '../accounts.ts';
-import { parseExplicitTarget, resolveOutboundReceiver } from '../targets.ts';
+import { normalizeAccountId } from '../accounts.ts';
+import { parseExplicitTarget } from '../targets.ts';
 import type { XbotChannelConfigRoot, XbotReplyTarget, XbotRoute } from '../types.ts';
-import {
-  buildReplyTargetForRoute,
-  sendViaXchatbotIfConfigured,
-} from '../xchatbot-outbound.ts';
-import {
-  sendWechatImageUrl,
-  sendWechatLink,
-  sendWechatText,
-  sendWechatVideoUrl,
-} from '../wechat-api.ts';
-import { mapOpenClawPayloadToReplies, resolveOpenClawMediaKind } from './map-reply.ts';
+import type { XbotDeliveryStage, XbotOutboundResult } from './delivery.ts';
+import { mapOpenClawPayloadToReplies } from './map-reply.ts';
 import { normalizeWechatOutboundText } from './normalize-text.ts';
+import { persistReplyTarget } from './reply-target-store.ts';
+import { assertAgentOutboundOk, sendRepliesPipeline } from './send-pipeline.ts';
 
-function buildSendResult(messageId?: string): ChannelMessageSendResult {
-  const id = messageId || randomUUID();
+export type XbotChannelSendResult = ChannelMessageSendResult & {
+  ok: boolean;
+  deliveryStage: XbotDeliveryStage;
+  sentCount: number;
+  failedCount: number;
+  errors: string[];
+  voiceSent: boolean;
+  mediaSent: boolean;
+};
+
+function buildChannelSendResult(result: XbotOutboundResult): XbotChannelSendResult {
+  const id = result.messageId || randomUUID();
   return {
     messageId: id,
     receipt: createMessageReceiptFromOutboundResults({
-      results: [{ messageId: id, channel: 'xbot' }],
+      results: [{
+        messageId: id,
+        channel: 'xbot',
+        // SDK 若忽略未知字段也无妨；诊断靠顶层 deliveryStage
+      }],
       sentAt: Date.now(),
     }),
+    ok: result.ok,
+    deliveryStage: result.stage,
+    sentCount: result.sentCount,
+    failedCount: result.failedCount,
+    errors: result.errors,
+    voiceSent: result.voiceSent,
+    mediaSent: result.mediaSent,
   };
 }
 
-async function sendRepliesViaXchatbot(args: {
-  cfg: XbotChannelConfigRoot;
-  accountId?: string | null;
-  route: XbotRoute;
-  replies: import('./map-reply.ts').XchatbotReply[];
-}): Promise<boolean> {
-  const replyTarget = buildReplyTargetForRoute({
-    cfg: args.cfg,
-    accountId: args.accountId,
-    route: args.route,
-  });
-  return sendViaXchatbotIfConfigured({
-    cfg: args.cfg,
-    replyTarget,
-    replies: args.replies,
-    onWarn: (message) => {
-      console.warn(message);
-    },
-  });
+function resolveRoute(to: string, route?: XbotRoute): XbotRoute {
+  if (route) return route;
+  const parsed = parseExplicitTarget(to);
+  if (!parsed?.route) throw new Error(`invalid target: ${to}`);
+  return parsed.route;
 }
 
 export async function sendXbotText(args: {
@@ -56,27 +56,22 @@ export async function sendXbotText(args: {
   text: string;
   wechatApiBaseUrl?: string;
   route?: XbotRoute;
-}): Promise<ChannelMessageSendResult> {
-  const accountId = normalizeAccountId(args.accountId);
-  void accountId;
-  const apiBase = (args.wechatApiBaseUrl || resolveWechatApiBaseUrl(args.cfg)).trim();
-  const parsed = parseExplicitTarget(args.to);
-  const route = args.route || parsed?.route;
-  if (!route) throw new Error(`invalid target: ${args.to}`);
+}): Promise<XbotChannelSendResult> {
+  void normalizeAccountId(args.accountId);
+  const route = resolveRoute(args.to, args.route);
   const text = normalizeWechatOutboundText(args.text);
   if (!text) throw new Error('text is required');
 
-  const relayed = await sendRepliesViaXchatbot({
+  const outbound = await sendRepliesPipeline({
     cfg: args.cfg,
     accountId: args.accountId,
     route,
     replies: [{ type: 'text', content: text }],
+    wechatApiBaseUrl: args.wechatApiBaseUrl,
+    onWarn: (message) => console.warn(message),
   });
-  if (relayed) return buildSendResult();
-
-  const receiver = resolveOutboundReceiver(route);
-  const result = await sendWechatText(apiBase, receiver, text);
-  return buildSendResult(result.messageId);
+  assertAgentOutboundOk(outbound);
+  return buildChannelSendResult(outbound);
 }
 
 export async function sendXbotMedia(args: {
@@ -92,13 +87,9 @@ export async function sendXbotMedia(args: {
   asVoice?: boolean;
   wechatApiBaseUrl?: string;
   route?: XbotRoute;
-}): Promise<ChannelMessageSendResult> {
-  const accountId = normalizeAccountId(args.accountId);
-  void accountId;
-  const apiBase = (args.wechatApiBaseUrl || resolveWechatApiBaseUrl(args.cfg)).trim();
-  const parsed = parseExplicitTarget(args.to);
-  const route = args.route || parsed?.route;
-  if (!route) throw new Error(`invalid target: ${args.to}`);
+}): Promise<XbotChannelSendResult> {
+  void normalizeAccountId(args.accountId);
+  const route = resolveRoute(args.to, args.route);
   const mediaUrl = String(args.mediaUrl || '').trim();
   const audioAsVoice = args.audioAsVoice === true || args.asVoice === true;
   if (!mediaUrl) {
@@ -109,15 +100,7 @@ export async function sendXbotMedia(args: {
     );
   }
 
-  const kind = resolveOpenClawMediaKind({
-    mediaUrl,
-    mimeType: args.mimeType,
-    fileName: args.fileName,
-    hintedType: args.type,
-    audioAsVoice,
-  });
   const caption = normalizeWechatOutboundText(String(args.text || ''));
-
   const mapped = mapOpenClawPayloadToReplies({
     text: caption,
     mediaUrl,
@@ -127,53 +110,16 @@ export async function sendXbotMedia(args: {
     audioAsVoice,
   });
 
-  // 语音/本地文件必须走 xchatbot（SILK + 读本地文件）；直连网关会变成无效链接卡片
-  const relayed = await sendRepliesViaXchatbot({
+  const outbound = await sendRepliesPipeline({
     cfg: args.cfg,
     accountId: args.accountId,
     route,
     replies: mapped,
+    wechatApiBaseUrl: args.wechatApiBaseUrl,
+    onWarn: (message) => console.warn(message),
   });
-  if (relayed) return buildSendResult();
-
-  const receiver = resolveOutboundReceiver(route);
-  const mediaReply = mapped.find((item) => item.type !== 'text');
-  const httpMedia = /^https?:\/\//i.test(mediaUrl);
-
-  let result;
-  switch (kind) {
-    case 'voice':
-      // 无 xchatbot 时本地路径发不了语音，避免再发「语音链接」糊弄人
-      if (!httpMedia) {
-        throw new Error('voice send requires xchatbot outbound (local media / SILK conversion)');
-      }
-      throw new Error('voice send requires xchatbot outbound for SILK conversion');
-    case 'video':
-      // 本地 mp4 只能走 xchatbot；relay 失败时别再甩「必须是 http URL」误导
-      if (!httpMedia) {
-        throw new Error('video send via xchatbot outbound failed (local file); check Worker/WeChat CDN logs');
-      }
-      result = await sendWechatVideoUrl(apiBase, receiver, mediaUrl, { caption });
-      break;
-    case 'audio':
-    case 'file': {
-      if (!httpMedia) throw new Error('file url must be http(s) when xchatbot relay is unavailable');
-      const article = mediaReply?.type === 'news' ? mediaReply.articles[0] : undefined;
-      result = await sendWechatLink(apiBase, receiver, {
-        url: mediaUrl,
-        title: article?.title || '文件',
-        desc: article?.description || '点击查看/下载',
-      }, caption);
-      break;
-    }
-    case 'image':
-    default:
-      if (!httpMedia) throw new Error('imageUrl must be an http(s) URL when xchatbot relay is unavailable');
-      result = await sendWechatImageUrl(apiBase, receiver, mediaUrl, caption);
-      break;
-  }
-
-  return buildSendResult(result.messageId);
+  assertAgentOutboundOk(outbound);
+  return buildChannelSendResult(outbound);
 }
 
 export function rememberReplyTarget(
@@ -184,6 +130,7 @@ export function rememberReplyTarget(
   const key = sessionKey.trim();
   if (!key) return;
   store.set(key, target);
+  void persistReplyTarget(key, target);
 }
 
 export function resolveReplyTargetBySession(

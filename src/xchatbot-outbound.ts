@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { resolveBotWechatId, resolveBotWechatName } from './accounts.ts';
+import {
+  buildOutboundResult,
+  type XbotOutboundResult,
+} from './outbound/delivery.ts';
 import type { XchatbotReply } from './outbound/map-reply.ts';
 import { resolveLocalMediaInReplies } from './outbound/resolve-local-media.ts';
 import {
@@ -10,13 +14,16 @@ import {
   convertAudioToSilkBase64,
   isLikelyAlreadySilk,
 } from './outbound/local-silk-convert.ts';
+import { recordSilkError } from './outbound/http-outbox.ts';
 import { markVoiceRecentlySent } from './outbound/voice-narrative-guard.ts';
 import type { XbotChannelConfigRoot, XbotReplyTarget, XbotRoute } from './types.ts';
 
 export type { XchatbotReply };
+export type { XbotOutboundResult };
 
 type XchatbotOutboundResponse = {
   ok?: boolean;
+  sentCount?: number;
   failedCount?: number;
   results?: Array<{ replyIndex?: number; sent?: boolean; error?: string }>;
 };
@@ -81,6 +88,16 @@ export function buildReplyTargetForRoute(args: {
   };
 }
 
+export function isXchatbotOutboundConfigured(
+  cfg: XbotChannelConfigRoot,
+  replyTarget?: Pick<XbotReplyTarget, 'xchatbotApiBaseUrl' | 'xchatbotAdminToken'>,
+): boolean {
+  return Boolean(
+    resolveXchatbotApiBaseUrl(cfg, replyTarget)
+    && resolveXchatbotAdminToken(cfg, replyTarget),
+  );
+}
+
 async function ensureLocalSilkForVoiceReplies(args: {
   replies: XchatbotReply[];
   onWarn?: (message: string) => void;
@@ -115,27 +132,56 @@ async function ensureLocalSilkForVoiceReplies(args: {
         mediaId: silk.base64,
         format: 4,
         duration: reply.duration,
-        // 已是内联 SILK；不带 failure fallback，避免成功后再被别的失败文案盖掉观感
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      // 单条坏媒体（如模型瞎写的 MEDIA:tts:）不拖垮同批已转好的语音
       args.onWarn?.(`[xbot] skip voice after local silk convert failed: ${message}`);
+      void recordSilkError(message);
     }
   }
   return out;
 }
 
+function replyNeedsXchatbot(reply: XchatbotReply): boolean {
+  if (reply.type === 'voice') return true;
+  if (reply.type === 'text' || reply.type === 'news') return false;
+  const mediaId = (reply.mediaId || '').trim();
+  if (!mediaId) return false;
+  if (/^https?:\/\//i.test(mediaId)) return false;
+  // 本地路径 / 内联 base64 必须走 Worker
+  return true;
+}
+
+export function repliesRequireXchatbot(replies: XchatbotReply[]): boolean {
+  return replies.some((item) => replyNeedsXchatbot(item));
+}
+
+/**
+ * 经 xchatbot `/admin/xbot/outbound` 发送。
+ * 返回结构化投递结果；未配置时 stage=unconfigured（由上层决定是否直连降级）。
+ */
 export async function sendViaXchatbotIfConfigured(args: {
   cfg: XbotChannelConfigRoot;
   replyTarget: XbotReplyTarget;
   replies: XchatbotReply[];
   onWarn?: (message: string) => void;
-}): Promise<boolean> {
+}): Promise<XbotOutboundResult> {
+  const messageId = randomUUID();
   const apiBaseUrl = resolveXchatbotApiBaseUrl(args.cfg, args.replyTarget);
   const adminToken = resolveXchatbotAdminToken(args.cfg, args.replyTarget);
-  if (!apiBaseUrl || !adminToken || args.replies.length === 0) {
-    return false;
+  if (!apiBaseUrl || !adminToken) {
+    return buildOutboundResult({
+      stage: 'unconfigured',
+      messageId,
+      detail: 'xchatbot outbound not configured',
+    });
+  }
+  if (args.replies.length === 0) {
+    return buildOutboundResult({
+      stage: 'wechat-ok',
+      messageId,
+      detail: 'empty replies',
+    });
   }
 
   const url = new URL('/admin/xbot/outbound', apiBaseUrl).toString();
@@ -146,23 +192,37 @@ export async function sendViaXchatbotIfConfigured(args: {
   try {
     const resolved = await resolveLocalMediaInReplies(args.replies);
     const voiceIn = resolved.filter((item) => item.type === 'voice').length;
+    const mediaIn = resolved.filter((item) => item.type !== 'text').length;
     const withSilk = await ensureLocalSilkForVoiceReplies({
       replies: resolved,
       onWarn: args.onWarn,
     });
     const voiceOut = withSilk.filter((item) => item.type === 'voice').length;
     if (voiceIn > 0 && voiceOut === 0) {
-      args.onWarn?.(`[xbot] xchatbot outbound failed: all ${voiceIn} voice item(s) failed local convert`);
-      return false;
+      const detail = `all ${voiceIn} voice item(s) failed local convert`;
+      args.onWarn?.(`[xbot] xchatbot outbound failed: ${detail}`);
+      return buildOutboundResult({
+        stage: 'failed',
+        messageId,
+        failedCount: voiceIn,
+        errors: [detail],
+        detail,
+      });
     }
+
     const { replies, skipped } = filterDuplicateReplies({ to, replies: withSilk });
     if (skipped > 0) {
       args.onWarn?.(`[xbot] skip ${skipped} duplicate reply item(s) within 45s`);
     }
     if (replies.length === 0) {
-      // 全是短时重复：若刚发过语音，当作成功，别让模型改口说失败
       if (voiceIn > 0) markVoiceRecentlySent(to);
-      return true;
+      return buildOutboundResult({
+        stage: 'deduped',
+        messageId,
+        voiceSent: voiceIn > 0,
+        mediaSent: mediaIn > 0,
+        detail: `skipped ${skipped} duplicate reply item(s)`,
+      });
     }
 
     const mediaKinds = replies
@@ -190,50 +250,103 @@ export async function sendViaXchatbotIfConfigured(args: {
     } catch {
       responseJson = null;
     }
+
     const results = responseJson?.results || [];
-    const failedCount = Number(responseJson?.failedCount || 0);
-    const voiceIndexes = new Set(
-      replies
-        .map((item, index) => (item.type === 'voice' ? index : -1))
-        .filter((index) => index >= 0),
+    const sentIndexes = new Set(
+      results
+        .filter((item) => item?.sent === true)
+        .map((item) => Number(item.replyIndex))
+        .filter((index) => Number.isFinite(index) && index >= 0),
     );
-    const anyVoiceSent = results.some(
-      (item) => item?.sent === true && voiceIndexes.has(Number(item.replyIndex)),
+    const sentCount = sentIndexes.size || Number(responseJson?.sentCount || 0);
+    const failedCount = Number(
+      responseJson?.failedCount
+      ?? results.filter((item) => item && item.sent === false).length,
     );
-    const voiceErrors = results
+    const errors = results
       .filter((item) => item && item.sent === false && item.error)
       .map((item) => String(item.error))
-      .slice(0, 3);
+      .slice(0, 5);
 
-    // 只要有语音真实发出，就记一笔：后面模型的失败定论要丢掉
-    if (anyVoiceSent || (response.ok && replies.some((item) => item.type === 'voice'))) {
-      markVoiceRecentlySent(to);
-    }
-
-    if (!response.ok || responseJson?.ok === false || failedCount > 0) {
-      const detail = voiceErrors.length > 0
-        ? ` ${voiceErrors.join(' | ')}`
-        : (responseText ? ` ${responseText.slice(0, 300)}` : '');
-      args.onWarn?.(
-        `[xbot] xchatbot outbound failed: HTTP ${response.status} failedCount=${failedCount}${detail}`,
-      );
-      // 部分成功（例如语音到了、旁白失败）按已送达处理，避免模型再报「没发出去」
-      if (anyVoiceSent) {
-        rememberRepliesSent({
-          to,
-          replies: replies.filter((_, index) =>
-            results.some((item) => item?.sent === true && Number(item.replyIndex) === index)),
-        });
-        return true;
-      }
-      return false;
-    }
-    rememberRepliesSent({ to, replies });
-    return true;
-  } catch (error) {
-    args.onWarn?.(
-      `[xbot] xchatbot outbound failed: ${error instanceof Error ? error.message : String(error)}`,
+    const voiceSent = replies.some(
+      (item, index) => item.type === 'voice' && sentIndexes.has(index),
+    ) || (
+      // Worker 未回 results 时，整批 ok 且含语音
+      response.ok
+      && responseJson?.ok !== false
+      && failedCount === 0
+      && replies.some((item) => item.type === 'voice')
     );
-    return false;
+    const mediaSent = replies.some(
+      (item, index) => item.type !== 'text' && sentIndexes.has(index),
+    ) || (
+      response.ok
+      && responseJson?.ok !== false
+      && failedCount === 0
+      && replies.some((item) => item.type !== 'text')
+    );
+
+    if (voiceSent) markVoiceRecentlySent(to);
+
+    const allOk = response.ok
+      && responseJson?.ok !== false
+      && failedCount === 0
+      && (results.length === 0 || sentCount >= replies.length);
+
+    if (allOk) {
+      rememberRepliesSent({ to, replies });
+      return buildOutboundResult({
+        stage: 'wechat-ok',
+        messageId,
+        sentCount: replies.length,
+        failedCount: 0,
+        voiceSent,
+        mediaSent,
+      });
+    }
+
+    const sentReplies = replies.filter((_, index) => sentIndexes.has(index));
+    if (sentReplies.length > 0) {
+      rememberRepliesSent({ to, replies: sentReplies });
+    }
+
+    const detail = `HTTP ${response.status} failedCount=${failedCount}`;
+    args.onWarn?.(
+      `[xbot] xchatbot outbound ${sentCount > 0 ? 'partial' : 'failed'}: ${detail}${
+        errors.length ? ` ${errors.join(' | ')}` : (responseText ? ` ${responseText.slice(0, 300)}` : '')
+      }`,
+    );
+
+    if (sentCount > 0) {
+      return buildOutboundResult({
+        stage: 'partial',
+        messageId,
+        sentCount,
+        failedCount: Math.max(failedCount, replies.length - sentCount),
+        errors,
+        voiceSent,
+        mediaSent,
+        detail,
+      });
+    }
+
+    return buildOutboundResult({
+      stage: 'failed',
+      messageId,
+      sentCount: 0,
+      failedCount: Math.max(failedCount, replies.length),
+      errors,
+      detail,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    args.onWarn?.(`[xbot] xchatbot outbound failed: ${detail}`);
+    return buildOutboundResult({
+      stage: 'failed',
+      messageId,
+      failedCount: args.replies.length,
+      errors: [detail],
+      detail,
+    });
   }
 }
