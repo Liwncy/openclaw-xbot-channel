@@ -58,6 +58,9 @@ export function isVoiceFailureNarrative(text: string): boolean {
   if (/没发成/.test(s) && /语音/.test(s)) return true;
   if (/发失败/.test(s) && /语音/.test(s)) return true;
   if (/语音.*失败/.test(s) || /失败.*语音/.test(s)) return true;
+  if (/转换服务/.test(s) && /(502|不可用|抽风|恢复)/.test(s)) return true;
+  if (/format\s*=\s*4/.test(s) && /(语音|转换|502)/.test(s)) return true;
+  if (/再盲发/.test(s) || /先不刷/.test(s)) return true;
 
   return false;
 }

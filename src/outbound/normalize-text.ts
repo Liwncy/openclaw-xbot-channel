@@ -16,9 +16,13 @@ function stripInternalMarkers(text: string): string {
     '\n',
   );
 
-  // 只有开头没有 End：删到第一个中文行之前的前缀
+  // 只有开头没有 End：优先删到第一个中文行；若整段都是英文草稿则整段丢掉
   s = s.replace(
     /\[Advisor consultation #\d+\][\s\S]*?(?=(?:^|\n)[\u4e00-\u9fff])/gim,
+    '\n',
+  );
+  s = s.replace(
+    /\[Advisor consultation #\d+\][\s\S]*$/gim,
     '\n',
   );
 
@@ -31,17 +35,26 @@ function stripInternalMarkers(text: string): string {
 
   // 标签被吃掉后的英文提纲残留
   s = s.replace(
-    /(?:^|\n)\s*The user is asking[\s\S]*?(?=(?:^|\n)[\u4e00-\u9fff])/gim,
+    /(?:^|\n)\s*The user is asking[\s\S]*?(?=(?:^|\n)[\u4e00-\u9fff]|$)/gim,
     '\n',
   );
   s = s.replace(
-    /(?:^|\n)\s*The assistant should:[\s\S]*?(?=(?:^|\n)[\u4e00-\u9fff])/gim,
+    /(?:^|\n)\s*The assistant should:[\s\S]*?(?=(?:^|\n)[\u4e00-\u9fff]|$)/gim,
     '\n',
   );
   s = s.replace(
-    /(?:^|\n)\s*Keep the tone[\s\S]*?(?=(?:^|\n)[\u4e00-\u9fff])/gim,
+    /(?:^|\n)\s*Keep the tone[\s\S]*?(?=(?:^|\n)[\u4e00-\u9fff]|$)/gim,
     '\n',
   );
+  s = s.replace(
+    /(?:^|\n)\s*The executor is stuck[\s\S]*?(?=(?:^|\n)[\u4e00-\u9fff]|$)/gim,
+    '\n',
+  );
+
+  // 模型把文件名当旁白刷出来（如 comfort.wav）
+  if (/^[A-Za-z0-9._\-]+\.(wav|mp3|m4a|ogg|silk|slk)$/i.test(s.trim())) {
+    return '';
+  }
 
   return s
     .replace(/[ \t]+\n/g, '\n')

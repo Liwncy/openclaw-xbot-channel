@@ -6,6 +6,11 @@ import {
 } from '../src/outbound/map-reply.ts';
 import { isAgentSuccessStage } from '../src/outbound/delivery.ts';
 import { isRetryableOutboundError } from '../src/outbound/http-outbox.ts';
+import {
+  isValidSilkPayload,
+  isLikelyAlreadySilk,
+  MIN_SILK_BYTES,
+} from '../src/outbound/local-silk-convert.ts';
 import { parseXbotParamMarker } from '../src/outbound/xbot-param.ts';
 
 function section(name: string): void {
@@ -85,5 +90,21 @@ assert.equal(isRetryableOutboundError('silk convert failed'), false);
 assert.equal(isRetryableOutboundError('local media too large: 12000KB > 8MB'), false);
 assert.equal(isRetryableOutboundError('HTTP 400 bad request'), false);
 section('retryable classifier');
+
+// silk payload validation（挡住 ~93B 脏包）
+{
+  const junk = Uint8Array.from({ length: 93 }, (_, i) => i);
+  assert.equal(isValidSilkPayload(junk), false);
+  const header = Buffer.from(`\x02${'#!SILK_V3'}`, 'binary');
+  const pad = Buffer.alloc(Math.max(0, MIN_SILK_BYTES - header.length), 1);
+  const ok = Buffer.concat([header, pad]);
+  assert.equal(isValidSilkPayload(ok), true);
+  assert.equal(isLikelyAlreadySilk({ format: 4, mediaId: 'short' }), false);
+  assert.equal(
+    isLikelyAlreadySilk({ format: 4, mediaId: ok.toString('base64') }),
+    true,
+  );
+}
+section('silk payload validation');
 
 console.log('\nselfcheck passed');
