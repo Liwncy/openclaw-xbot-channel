@@ -535,13 +535,15 @@ export async function dispatchXbotInbound(args: {
     || (counts?.tool ?? 0) > 0
     || (counts?.block ?? 0) > 0
     || (counts?.final ?? 0) > 0;
-  const dispatched = agentDispatched && hasVisibleReply;
+  // 冒泡 forceDispatch：Agent 已启动即算接手，避免「尚无可见回复」时 Worker 回落本地聪明对话
+  const forceDispatch = parsed.forceDispatch === true;
+  const dispatched = agentDispatched && (hasVisibleReply || forceDispatch);
   const admissionReason = runResult?.admission?.reason;
   return {
     dispatched,
     sessionKey,
     reason: dispatched
-      ? undefined
+      ? (forceDispatch && !hasVisibleReply ? 'force-dispatch-accepted' : undefined)
       : !agentDispatched
         ? admissionReason || runResult?.admission?.kind || 'not-dispatched'
         : 'agent-no-reply',
