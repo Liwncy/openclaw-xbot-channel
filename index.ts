@@ -5,6 +5,7 @@ import { createXbotChannelPlugin } from './src/channel-plugin.ts';
 import { XbotConfigSchema } from './src/config-schema.ts';
 import { GATEWAY_METHODS } from './src/constants.ts';
 import { registerXbotHttpRoutes } from './src/http-routes.ts';
+import { registerXbotLearnWriteTool } from './src/learn-tool.ts';
 
 type GatewayRuntime = {
   bridge?: ReturnType<typeof getXbotBridge>;
@@ -43,6 +44,7 @@ const plugin = {
     const bridge = getCurrentBridge(api);
 
     registerXbotChatHistoryTool(api);
+    registerXbotLearnWriteTool(api);
 
     if (!runtime.serviceRegistered) {
       api.registerService({

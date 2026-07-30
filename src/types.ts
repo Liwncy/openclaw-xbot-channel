@@ -72,6 +72,8 @@ export type ParsedXbotInbound = {
   senderId: string;
   senderName: string;
   botMentioned: boolean;
+  /** xchatbot 随机冒泡等：未点名也要跑 Agent */
+  forceDispatch?: boolean;
   timestamp: number;
   clientId?: string;
   connId?: string;

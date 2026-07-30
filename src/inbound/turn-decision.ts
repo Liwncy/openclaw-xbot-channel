@@ -166,15 +166,20 @@ export function decideXbotInboundTurn(args: {
     };
   }
 
-  // mention：全员消息上送并攒上下文，仅点名触发回复
+  // mention：全员消息上送并攒上下文，仅点名触发回复；
+  // forceDispatch（如 xchatbot 随机冒泡）未点名也要跑 Agent
   const mentioned = parsed.botMentioned === true;
+  const forceDispatch = parsed.forceDispatch === true;
+  const shouldDispatch = mentioned || forceDispatch;
   return {
     accept: true,
-    shouldDispatch: mentioned,
+    shouldDispatch,
     shouldAccumulate: true,
     groupReplyMode,
     historyLimit,
     historyForce,
-    reason: mentioned ? undefined : 'history-accumulated',
+    reason: shouldDispatch
+      ? (forceDispatch && !mentioned ? 'force-dispatch' : undefined)
+      : 'history-accumulated',
   };
 }

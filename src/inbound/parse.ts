@@ -145,6 +145,7 @@ export function parseXbotInboundParams(
     senderId,
     senderName,
     botMentioned,
+    forceDispatch: asBoolean(input.forceDispatch ?? input.forceReply ?? input.ambientBubble),
     timestamp,
     clientId: asString(input.clientId).trim() || undefined,
     connId: asString(input.connId).trim() || undefined,
