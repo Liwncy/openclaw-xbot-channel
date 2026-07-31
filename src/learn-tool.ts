@@ -13,6 +13,7 @@ type LearnWriteParams = {
   summary?: string;
   trigger?: string;
   action?: string;
+  delegateTo?: string;
   evidence?: string;
   roomId?: string;
   entryMarkdown?: string;
@@ -25,35 +26,44 @@ const XBOT_LEARN_WRITE_PARAMETERS = {
     target: {
       type: 'string',
       enum: ['pending', 'routes'],
-      description: 'pending=待批 skill/草稿；routes=偷懒转交路由（有依据时可自行写入）',
+      description:
+        'routes=指令/转交/可咨询人；pending=未想清的草稿或待批 skill',
     },
     title: {
       type: 'string',
-      description: '短标题，例如「某机器人发视频」',
+      description: '短标题，例如「点歌 music」「问某某修图」',
     },
     kind: {
       type: 'string',
-      description: 'delegate | skill | capability',
+      description:
+        'routes 用 command|bot|human；pending 还可用 delegate|skill|capability',
     },
     summary: {
       type: 'string',
-      description: '一句话摘要',
+      description: '一句话用途 / 什么时候问 TA',
     },
     trigger: {
       type: 'string',
-      description: '什么场景该想起这条',
+      description: '什么场景该想起这条（pending 常用）',
     },
     action: {
       type: 'string',
-      description: '口令模板 / 接口要点 / skill 设想',
+      description:
+        '口令模板，如 music {歌名} 或 @某某 {问题}；参数用 {占位}',
+    },
+    delegateTo: {
+      type: 'string',
+      description:
+        '目标人/机器人昵称或 @称呼；必填具体值，禁止写「见口令模板」',
     },
     evidence: {
       type: 'string',
-      description: '历史依据：谁→谁做了啥；禁止臆造',
+      description:
+        '历史依据：谁(昵称+id)→谁，说了/回了啥；禁止臆造。写 routes 必填',
     },
     roomId: {
       type: 'string',
-      description: '群 roomId 或 all',
+      description: '真实 roomId@chatroom；多群通用写 all；实在没有才 unknown',
     },
     entryMarkdown: {
       type: 'string',
@@ -84,23 +94,35 @@ function resolveTargetFile(target: LearnTarget): string {
   return path.join(root, 'skills', 'learn', 'PENDING.md');
 }
 
+function resolveDelegateTo(params: LearnWriteParams, action: string): string {
+  const explicit = asString(params.delegateTo);
+  if (explicit && !/见口令模板/u.test(explicit)) return explicit;
+  // 口令里自带 @某人时，抽第一处称呼作目标
+  const atMatch = action.match(/@([^\s@]{1,32})/u);
+  if (atMatch?.[0]) return atMatch[0];
+  return '';
+}
+
 function buildEntryMarkdown(params: LearnWriteParams, target: LearnTarget): string {
   const custom = asString(params.entryMarkdown);
   if (custom) return custom.replace(/\s+$/u, '') + '\n';
 
   const title = asString(params.title) || '未命名条目';
-  const kind = asString(params.kind) || (target === 'routes' ? 'delegate' : 'skill');
+  const kind = asString(params.kind)
+    || (target === 'routes' ? 'command' : 'skill');
   const room = asString(params.roomId) || 'unknown';
   const summary = asString(params.summary) || '(无摘要)';
   const trigger = asString(params.trigger) || '(未填)';
   const action = asString(params.action) || '(未填)';
   const evidence = asString(params.evidence) || '(未填依据——不建议保留)';
+  const delegateTo = resolveDelegateTo(params, action) || '(未填目标——请补昵称或@称呼)';
 
   if (target === 'routes') {
     return [
       `### ${title}`,
+      `- 类型：${kind}`,
       `- 群：${room}`,
-      `- 目标：${action.includes('@') ? action : '(见口令模板)'}`,
+      `- 目标：${delegateTo}`,
       `- 口令模板：${action}`,
       `- 用途：${summary}`,
       `- 依据：${evidence}`,
@@ -115,9 +137,10 @@ function buildEntryMarkdown(params: LearnWriteParams, target: LearnTarget): stri
     `- 群：${room}`,
     `- 摘要：${summary}`,
     `- 触发：${trigger}`,
+    `- 目标：${delegateTo}`,
     `- 动作草稿：${action}`,
     `- 依据：${evidence}`,
-    `- 状态：${kind === 'delegate' ? 'draft' : 'awaiting_owner'}`,
+    `- 状态：${kind === 'skill' || kind === 'capability' ? 'awaiting_owner' : 'draft'}`,
     '',
   ].join('\n');
 }
@@ -131,7 +154,7 @@ async function ensureLearnFile(filePath: string, target: LearnTarget): Promise<v
       ? [
         '# 偷懒转交路由',
         '',
-        '> 仅偷懒模式使用。有历史依据才可写入。',
+        '> 仅偷懒模式使用。指令/@机器人/@人有回应/有人答疑——有依据就写。',
         '',
         '## 路由列表',
         '',
@@ -139,7 +162,7 @@ async function ensureLearnFile(filePath: string, target: LearnTarget): Promise<v
       : [
         '# 学习草稿 / 待批 skill',
         '',
-        '> skill/capability 需主人批准；转交可自行写 ROUTES。',
+        '> skill/capability 需主人批准；转交/指令/可咨询人可自行写 ROUTES。',
         '',
         '## 列表',
         '',
@@ -170,8 +193,13 @@ export function registerXbotLearnWriteTool(api: OpenClawPluginApi): void {
     const tool: AnyAgentTool = {
       name: 'xbot_learn_write',
       label: 'Xbot Learn Write',
-      description:
-        '把从本次携带群聊历史里学到的内容写入 workspace：pending=待批 skill；routes=偷懒转交路由。学到可复用口令/能力时必须调用，不要只口头说记住了。',
+      description: [
+        '把群聊里学到的可复用线索写入 workspace。',
+        '接单后应主动调用，不要等用户说「记一下」。',
+        '优先记：指令口令；@某人且对方有回应；有人认真回答了某类问题（可记以后问 TA）；@机器人干活成功。',
+        'routes=command|bot|human；pending=草稿或待批 skill。',
+        '务必填 evidence、尽量填 roomId 与 delegateTo；禁止目标写「见口令模板」。',
+      ].join(''),
       parameters: XBOT_LEARN_WRITE_PARAMETERS as never,
       async execute(_toolCallId: string, rawParams: LearnWriteParams) {
         const targetRaw = asString(rawParams?.target).toLowerCase();
