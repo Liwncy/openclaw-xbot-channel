@@ -3,7 +3,7 @@
   "name": "Xbot",
   "channels": ["xbot"],
   "contracts": {
-    "tools": ["xbot_chat_history"]
+    "tools": ["xbot_chat_history", "xbot_learn_write"]
   },
   "configSchema": {
     "type": "object",
