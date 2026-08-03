@@ -4,7 +4,7 @@ import path from 'node:path';
 import type {AnyAgentTool, OpenClawPluginApi} from 'openclaw/plugin-sdk/core';
 import {jsonResult} from 'openclaw/plugin-sdk/core';
 
-type LearnTarget = 'pending' | 'routes';
+type LearnTarget = 'pending' | 'routes' | 'mode';
 
 type LearnWriteParams = {
   target?: LearnTarget;
@@ -19,24 +19,36 @@ type LearnWriteParams = {
   entryMarkdown?: string;
 };
 
+/** 不能作为转交目标：机器人自己 / 主人（只打目标与口令，不扫依据正文） */
+const FORBIDDEN_DELEGATE_PATTERNS: RegExp[] = [
+  /小聪明儿?/u,
+  /wxid_ahl9az25aljx22/i,
+  /李芈仙/u,
+  /\bliwncy\b/i,
+  /wxid_5jfnhtqy74xr22/i,
+  /本机器人/u,
+];
+
+const MODE_IDS = new Set(['normal', 'foxi', 'lazy', 'lcmm', 'ysqq', 'ghds', 'gxwy']);
+
 const XBOT_LEARN_WRITE_PARAMETERS = {
   type: 'object',
   additionalProperties: false,
   properties: {
     target: {
       type: 'string',
-      enum: ['pending', 'routes'],
+      enum: ['pending', 'routes', 'mode'],
       description:
-        'routes=指令/转交/可咨询人；pending=未想清的草稿或待批 skill',
+        'routes=转交/指令/可咨询人；pending=草稿或待批 skill；mode=写入当前模式 CURRENT.md（切模式时必调）',
     },
     title: {
       type: 'string',
-      description: '短标题，例如「点歌 music」「问某某修图」',
+      description: '短标题；target=mode 时可写模式名如 foxi',
     },
     kind: {
       type: 'string',
       description:
-        'routes 用 command|bot|human；pending 还可用 delegate|skill|capability',
+        'routes 用 command|bot|human；pending 还可用 delegate|skill|capability；mode 时写 foxi|lcmm|normal 等',
     },
     summary: {
       type: 'string',
@@ -49,12 +61,12 @@ const XBOT_LEARN_WRITE_PARAMETERS = {
     action: {
       type: 'string',
       description:
-        '口令模板，如 music {歌名} 或 @某某 {问题}；参数用 {占位}',
+        '口令模板或通俗说法，如 music {歌名} / @某某帮看下{问题}；参数用 {占位}',
     },
     delegateTo: {
       type: 'string',
       description:
-        '目标人/机器人昵称或 @称呼；必填具体值，禁止写「见口令模板」',
+        '目标人/机器人昵称或 @称呼；禁止小聪明儿/自己/李芈仙/主人',
     },
     evidence: {
       type: 'string',
@@ -67,7 +79,7 @@ const XBOT_LEARN_WRITE_PARAMETERS = {
     },
     entryMarkdown: {
       type: 'string',
-      description: '若提供则直接追加这段 markdown（优先于上面字段拼装）',
+      description: '若提供则直接追加这段 markdown（优先于上面字段拼装；routes 时仍会校验禁目标）',
     },
   },
   required: ['target'],
@@ -89,18 +101,67 @@ function resolveWorkspaceRoot(): string {
 function resolveTargetFile(target: LearnTarget): string {
   const root = resolveWorkspaceRoot();
   if (target === 'routes') {
-    return path.join(root, 'skills', 'lazy', 'ROUTES.md');
+    return path.join(root, 'skills', 'modes', 'foxi', 'ROUTES.md');
+  }
+  if (target === 'mode') {
+    return path.join(root, 'skills', 'modes', 'CURRENT.md');
   }
   return path.join(root, 'skills', 'learn', 'PENDING.md');
+}
+
+function resolveLegacyRoutesFiles(): string[] {
+  const root = resolveWorkspaceRoot();
+  return [
+    path.join(root, 'skills', 'foxi', 'ROUTES.md'),
+    path.join(root, 'skills', 'lazy', 'ROUTES.md'),
+  ];
 }
 
 function resolveDelegateTo(params: LearnWriteParams, action: string): string {
   const explicit = asString(params.delegateTo);
   if (explicit && !/见口令模板/u.test(explicit)) return explicit;
-  // 口令里自带 @某人时，抽第一处称呼作目标
   const atMatch = action.match(/@([^\s@]{1,32})/u);
   if (atMatch?.[0]) return atMatch[0];
   return '';
+}
+
+function mentionsForbiddenDelegate(...parts: string[]): string | null {
+  const blob = parts.filter(Boolean).join('\n');
+  if (!blob) return null;
+  for (const re of FORBIDDEN_DELEGATE_PATTERNS) {
+    if (re.test(blob)) return re.source;
+  }
+  return null;
+}
+
+function resolveModeId(params: LearnWriteParams): string {
+  const raw = (asString(params.kind) || asString(params.title) || 'normal').toLowerCase();
+  if (raw === 'lazy') return 'foxi';
+  if (MODE_IDS.has(raw)) return raw;
+  // 允许「切佛系」这类中文落在 title/summary
+  const text = `${asString(params.title)} ${asString(params.summary)} ${asString(params.kind)}`;
+  if (/佛系|偷懒/u.test(text)) return 'foxi';
+  if (/绿茶/u.test(text)) return 'lcmm';
+  if (/阴阳/u.test(text)) return 'ysqq';
+  if (/拱火/u.test(text)) return 'ghds';
+  if (/国学|文言/u.test(text)) return 'gxwy';
+  if (/正常|默认|恢复/u.test(text)) return 'normal';
+  return 'normal';
+}
+
+function buildModeMarkdown(modeId: string): string {
+  const skillHint = modeId === 'normal'
+    ? '按 SOUL.md 默认人设；不再转交。'
+    : `严格按 skills/modes/${modeId}/SKILL.md 执行，覆盖 SOUL 默认话风。`;
+  return [
+    '# 当前模式',
+    '',
+    `mode: ${modeId}`,
+    '',
+    `> ${skillHint}`,
+    '> 每轮先读本文件；不是 normal 就以模式为主，直到 /normal。',
+    '',
+  ].join('\n');
 }
 
 function buildEntryMarkdown(params: LearnWriteParams, target: LearnTarget): string {
@@ -150,23 +211,38 @@ async function ensureLearnFile(filePath: string, target: LearnTarget): Promise<v
   try {
     await access(filePath);
   } catch {
+    if (target === 'routes') {
+      for (const legacy of resolveLegacyRoutesFiles()) {
+        try {
+          const legacyText = await readFile(legacy, 'utf8');
+          if (legacyText.trim() && !/已迁移/u.test(legacyText.slice(0, 80))) {
+            await writeFile(filePath, legacyText, 'utf8');
+            return;
+          }
+        } catch {
+          // try next
+        }
+      }
+    }
     const seed = target === 'routes'
       ? [
-        '# 偷懒转交路由',
+        '# 佛系转交路由',
         '',
-        '> 仅偷懒模式使用。指令/@机器人/@人有回应/有人答疑——有依据就写。',
+        '> 仅佛系模式使用。禁止目标为小聪明儿/李芈仙。',
         '',
         '## 路由列表',
         '',
       ].join('\n')
-      : [
-        '# 学习草稿 / 待批 skill',
-        '',
-        '> skill/capability 需主人批准；转交/指令/可咨询人可自行写 ROUTES。',
-        '',
-        '## 列表',
-        '',
-      ].join('\n');
+      : target === 'mode'
+        ? buildModeMarkdown('normal')
+        : [
+          '# 学习草稿 / 待批 skill',
+          '',
+          '> skill/capability 需主人批准；转交/指令/可咨询人可自行写 ROUTES。',
+          '',
+          '## 列表',
+          '',
+        ].join('\n');
     await writeFile(filePath, `${seed}\n`, 'utf8');
   }
 }
@@ -180,7 +256,6 @@ function insertEntry(existing: string, entry: string): string {
       const afterMarker = idx + marker.length;
       const before = existing.slice(0, afterMarker).replace(/\s*$/u, '');
       const after = existing.slice(afterMarker).replace(/^\s*/u, '');
-      // 去掉占位「（暂无…）」行
       const cleanedAfter = after.replace(/^\(?暂无[^)\n]*\)?\s*\n*/u, '');
       return `${before}\n\n${trimmedEntry}\n${cleanedAfter}`.replace(/\n{3,}/g, '\n\n');
     }
@@ -194,26 +269,58 @@ export function registerXbotLearnWriteTool(api: OpenClawPluginApi): void {
       name: 'xbot_learn_write',
       label: 'Xbot Learn Write',
       description: [
-        '把群聊里学到的可复用线索写入 workspace。',
-        '接单后应主动调用，不要等用户说「记一下」。',
-        '优先记：指令口令；@某人且对方有回应；有人认真回答了某类问题（可记以后问 TA）；@机器人干活成功。',
-        'routes=command|bot|human；pending=草稿或待批 skill。',
-        '务必填 evidence、尽量填 roomId 与 delegateTo；禁止目标写「见口令模板」。',
+        '写入 workspace：routes=转交路由；pending=草稿/待批 skill；mode=当前模式 CURRENT.md。',
+        '切模式时必须 target=mode。',
+        '材料可来自本轮上下文，或先 xbot_chat_history 查群日志再从结果学习。',
+        '记 routes 时禁止目标为小聪明儿/自己/李芈仙。',
+        '优先记：指令口令；@他人且有回应；有人认真答疑；通俗说法也可记。',
       ].join(''),
       parameters: XBOT_LEARN_WRITE_PARAMETERS as never,
       async execute(_toolCallId: string, rawParams: LearnWriteParams) {
         const targetRaw = asString(rawParams?.target).toLowerCase();
-        if (targetRaw !== 'pending' && targetRaw !== 'routes') {
-          throw new Error('target 必须是 pending 或 routes');
+        if (targetRaw !== 'pending' && targetRaw !== 'routes' && targetRaw !== 'mode') {
+          throw new Error('target 必须是 pending、routes 或 mode');
         }
         const target = targetRaw as LearnTarget;
+        const filePath = resolveTargetFile(target);
+
+        if (target === 'mode') {
+          const modeId = resolveModeId(rawParams || {});
+          const next = buildModeMarkdown(modeId);
+          await mkdir(path.dirname(filePath), {recursive: true});
+          await writeFile(filePath, next, 'utf8');
+          return jsonResult({
+            ok: true,
+            target,
+            mode: modeId,
+            filePath,
+            bytes: Buffer.byteLength(next, 'utf8'),
+            preview: next.trim(),
+          });
+        }
+
         const evidence = asString(rawParams?.evidence);
         const entryMarkdown = asString(rawParams?.entryMarkdown);
         if (target === 'routes' && !evidence && !entryMarkdown) {
           throw new Error('写入 routes 必须提供 evidence（历史依据），禁止臆造');
         }
 
-        const filePath = resolveTargetFile(target);
+        const action = asString(rawParams?.action);
+        const delegateTo = resolveDelegateTo(rawParams || {}, action);
+        const entryTargetLine = (entryMarkdown.match(/^\s*-\s*目标：\s*(.+)$/mu)?.[1] || '').trim();
+        const entryActionLine = (entryMarkdown.match(/^\s*-\s*口令模板：\s*(.+)$/mu)?.[1] || '').trim();
+        const forbidden = mentionsForbiddenDelegate(
+          delegateTo,
+          action,
+          entryTargetLine,
+          entryActionLine,
+        );
+        if (target === 'routes' && forbidden) {
+          throw new Error(
+            `拒绝写入：转交目标不能是小聪明儿自己或李芈仙（命中 ${forbidden}）。请记其他人/其他机器人。`,
+          );
+        }
+
         await ensureLearnFile(filePath, target);
         const previous = await readFile(filePath, 'utf8');
         const entry = buildEntryMarkdown(rawParams || {}, target);

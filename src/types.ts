@@ -21,6 +21,8 @@ export type XbotChannelConfigSection = XbotChannelPolicyConfig & {
   blockStreaming?: boolean;
   /** 是否把 tool 结果也转发到微信，默认 false */
   allowTool?: boolean;
+  /** 主人 wxid 列表：通俗口令改写与 OwnerAllowFrom；默认可回落 commands.ownerAllowFrom */
+  ownerAllowFrom?: string[];
   accounts?: Record<string, XbotAccountConfig | undefined>;
 };
 
@@ -42,6 +44,8 @@ export type XbotChannelConfigRoot = {
   };
   commands?: {
     ownerAllowFrom?: string[];
+    allowFrom?: Record<string, string[] | undefined>;
+    text?: boolean;
   };
 };
 

@@ -34,6 +34,12 @@ import {
 } from '../outbound/voice-narrative-guard.ts';
 import { resolveOutboundReceiver } from '../targets.ts';
 import type { ParsedXbotInbound, XbotChannelConfigRoot, XbotReplyTarget } from '../types.ts';
+import {
+  isXbotOwnerSender,
+  looksLikeOpenClawSlashCommand,
+  resolveNativeCommandAlias,
+  resolveOwnerWechatIds,
+} from './native-command-alias.ts';
 
 export type XbotDeliverContext = {
   cfg: XbotChannelConfigRoot;
@@ -67,21 +73,38 @@ const AMBIENT_BUBBLE_HINT = [
   '[/系统提示]',
 ].join('\n');
 
+/** 模式粘性：每轮提醒读 CURRENT.md */
+const MODE_STICKY_HINT = [
+  '[系统提示：模式优先]',
+  '先 read skills/modes/CURRENT.md。若 mode 不是 normal，严格按对应 skills/modes/<mode>/SKILL.md 执行，覆盖 SOUL 默认话风，别偷偷变回默认皮。',
+  '[/系统提示]',
+].join('\n');
+
 /** 接单后主动学习：别等用户喊「记一下」 */
 function buildLearnScanHint(roomId: string): string {
   const roomLine = roomId
     ? `本群 roomId=${roomId}，写入 routes 时群字段尽量填它。`
     : '写入 routes 时群字段尽量填真实 roomId，没有再写 unknown。';
   return [
-    '[系统提示：接单后先扫历史学习]',
-    '先扫本次上下文近期消息，有可复用线索就立刻调用 xbot_learn_write，再回答用户；不要等对方说「记一下」。',
-    '重点（放宽记）：指令/口令；@某人且对方有回应；有人认真回答了某类问题（可记以后问 TA，不只 @bot）。',
-    '写 routes 必填 evidence；填 delegateTo 具体昵称；口令用 action；禁止目标写「见口令模板」。',
+    '[系统提示：接单后可从群日志学习]',
+    '先扫本次上下文；材料不够或对方让「学一下/翻日志」时，先调用 xbot_chat_history 查本群，再从返回记录里提炼并 xbot_learn_write。',
+    '重点（放宽记）：指令/口令/通俗说法；@他人且有回应；有人认真答疑。',
+    '写 routes 必填 evidence；delegateTo 填具体他人；禁止目标为小聪明儿/自己/李芈仙。',
+    'routes 路径：skills/modes/foxi/ROUTES.md。',
     roomLine,
     '[/系统提示]',
   ].join('\n');
 }
 
+/** 佛系转交：路径 + 15字 + 类比放宽 */
+const FOXI_DELEGATE_HINT = [
+  '[系统提示：若 CURRENT.md 为 foxi（或刚切佛系/偷懒）]',
+  '1) 自己旁白≤15字（口令本身不限）；2) 先 read skills/modes/foxi/ROUTES.md；',
+  '3) 放宽类比：用途沾边/通俗说法对得上即可转交，不必字面相同；把口令或通俗转述发到本群；',
+  '4) 禁止自己包办；禁止安排小聪明儿自己或李芈仙。',
+  '不是佛系则忽略。',
+  '[/系统提示]',
+].join('\n');
 export async function deliverXbotReply(
   deliverCtx: XbotDeliverContext,
   payload: {
@@ -234,6 +257,7 @@ export async function dispatchXbotInbound(args: {
   let pendingHistoryEntries: XbotHistoryEntry[] = [];
 
   // mention 模式：未点名先攒；窗满且 historyForce 时静默 flush 进 session
+  // 通俗口令不强制入站：仍须 @/点名（或冒泡）才会 dispatch
   if (!shouldDispatch && turn.shouldAccumulate) {
     recordXbotPendingGroupText({
       historyMap: groupHistories,
@@ -297,6 +321,26 @@ export async function dispatchXbotInbound(args: {
     ? HISTORY_FLUSH_SENDER_NAME
     : parsed.senderName;
   const effectiveRawBody = silentHistoryFlush ? HISTORY_FLUSH_RAW_BODY : parsed.rawBody;
+  const senderIsOwner = !silentHistoryFlush && isXbotOwnerSender(cfg, parsed.senderId);
+  const botNames = [String(channelCfg.botWechatName || '').trim(), '小聪明儿'].filter(Boolean);
+  // 已进 OpenClaw 后：去掉 @机器人 前缀再匹配通俗口令；不因口令强制入站
+  const aliasHit = silentHistoryFlush
+    ? null
+    : resolveNativeCommandAlias(parsed.rawBody, {botNames});
+  const commandBody = silentHistoryFlush
+    ? HISTORY_FLUSH_RAW_BODY
+    : senderIsOwner && aliasHit
+      ? aliasHit.commandBody
+      : effectiveRawBody;
+  if (senderIsOwner && aliasHit) {
+    api.logger?.info?.(
+      `[xbot] native command alias matched=${aliasHit.matched} -> ${aliasHit.commandBody}`,
+    );
+  }
+  const ownerAllowFromForCtx = senderIsOwner
+    && (Boolean(aliasHit) || looksLikeOpenClawSlashCommand(commandBody, {botNames}))
+    ? resolveOwnerWechatIds(cfg)
+    : undefined;
   let outboundReplyIndex = 0;
 
   let agentVisibleBody: string;
@@ -331,7 +375,7 @@ export async function dispatchXbotInbound(args: {
     }
     if (parsed.peer.kind === 'group') {
       const roomId = String(parsed.peer.id || '').trim();
-      agentVisibleBody = `${buildLearnScanHint(roomId)}\n\n${agentVisibleBody}`;
+      agentVisibleBody = `${MODE_STICKY_HINT}\n\n${FOXI_DELEGATE_HINT}\n\n${buildLearnScanHint(roomId)}\n\n${agentVisibleBody}`;
     }
     if (parsed.forceDispatch === true) {
       agentVisibleBody = `${AMBIENT_BUBBLE_HINT}\n\n${agentVisibleBody}`;
@@ -422,7 +466,7 @@ export async function dispatchXbotInbound(args: {
       body,
       rawBody: effectiveRawBody,
       bodyForAgent: agentVisibleBody,
-      commandBody: effectiveRawBody,
+      commandBody,
     },
     ...(inboundMedia ? { media: inboundMedia } : {}),
     access: {
@@ -442,6 +486,7 @@ export async function dispatchXbotInbound(args: {
       OriginatingTo: canonicalTo,
       ...(silentHistoryFlush ? { historyFlush: true } : {}),
       ...(parsed.forceDispatch === true ? { ambientBubble: true } : {}),
+      ...(ownerAllowFromForCtx?.length ? { OwnerAllowFrom: ownerAllowFromForCtx } : {}),
     },
   })) as OpenClawChannelRuntimeContext;
 

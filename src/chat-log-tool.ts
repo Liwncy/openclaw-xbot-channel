@@ -155,7 +155,11 @@ export function registerXbotChatHistoryTool(api: OpenClawPluginApi): void {
     const tool: AnyAgentTool = {
       name: 'xbot_chat_history',
       label: 'Xbot Chat History',
-      description: 'Query recent xchatbot chat history for the current WeChat group or an explicit session, then analyze or summarize it.',
+      description: [
+        '查询当前微信群（或指定 session）的近期聊天记录。',
+        '用途：总结群聊；以及持续学习——先查日志，再对其中的指令/@他人有回应/答疑等调用 xbot_learn_write 落盘。',
+        '对方说「学一下最近」「翻日志学」时必须先调本工具。',
+      ].join(''),
       parameters: XBOT_CHAT_HISTORY_PARAMETERS as never,
       async execute(_toolCallId: string, rawParams: ChatLogToolParams) {
         const cfg = (toolContext.getRuntimeConfig?.() as XbotChannelConfigRoot | undefined)

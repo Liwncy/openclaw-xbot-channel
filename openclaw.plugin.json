@@ -66,6 +66,11 @@
         "default": true,
         "description": "Legacy: when groupReplyMode unset, true→mention mode, false→all"
       },
+      "ownerAllowFrom": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Owner wxids for colloquial native-command aliases and OwnerAllowFrom"
+      },
       "groupReplyMode": {
         "type": "string",
         "enum": ["mention", "all"],
@@ -128,6 +133,10 @@
             "items": { "type": "string" }
           },
           "requireMention": { "type": "boolean" },
+          "ownerAllowFrom": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
           "groupReplyMode": {
             "type": "string",
             "enum": ["mention", "all"]
