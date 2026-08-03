@@ -12,6 +12,10 @@ type LearnWriteParams = {
   kind?: string;
   summary?: string;
   trigger?: string;
+  /** keyword | mention | quote | keyword+quote */
+  triggerStyle?: string;
+  /** 免 @ / 引用场景的触发词或前缀 */
+  keywords?: string;
   action?: string;
   delegateTo?: string;
   evidence?: string;
@@ -58,20 +62,31 @@ const XBOT_LEARN_WRITE_PARAMETERS = {
       type: 'string',
       description: '什么场景该想起这条（pending 常用）',
     },
+    triggerStyle: {
+      type: 'string',
+      enum: ['keyword', 'mention', 'quote', 'keyword+quote'],
+      description:
+        'routes：keyword=免@关键词触发；mention=要@；quote=要先引用消息；keyword+quote=引用+关键词',
+    },
+    keywords: {
+      type: 'string',
+      description:
+        '免@或引用场景的触发词/前缀，多个用逗号分隔；如 music / 撤回',
+    },
     action: {
       type: 'string',
       description:
-        '口令模板或通俗说法，如 music {歌名} / @某某帮看下{问题}；参数用 {占位}',
+        '口令模板：免@写关键词模板如 music {歌名}；要@写 @某某…；引用类写「先引用{某类消息}再发…」',
     },
     delegateTo: {
       type: 'string',
       description:
-        '目标人/机器人昵称或 @称呼；禁止小聪明儿/自己/李芈仙/主人',
+        '目标人/机器人昵称或 @称呼；禁止小聪明儿/自己/李芈仙/主人；免@关键词触发也要填会响应的 bot 昵称',
     },
     evidence: {
       type: 'string',
       description:
-        '历史依据：谁(昵称+id)→谁，说了/回了啥；禁止臆造。写 routes 必填',
+        '历史依据：谁→谁，说了/回了啥；引用类写清引用了什么；禁止臆造。写 routes 必填',
     },
     roomId: {
       type: 'string',
@@ -125,6 +140,20 @@ function resolveDelegateTo(params: LearnWriteParams, action: string): string {
   return '';
 }
 
+function normalizeTriggerStyle(raw: unknown, action: string): string {
+  const v = asString(raw).toLowerCase();
+  if (v === 'keyword' || v === 'mention' || v === 'quote' || v === 'keyword+quote') {
+    return v;
+  }
+  if (/先引用|引用.{0,8}再|\[引用消息\]/u.test(action)) {
+    return /@/.test(action) ? 'keyword+quote' : 'quote';
+  }
+  if (/@/.test(action)) return 'mention';
+  // 无 @ 的口令模板默认按免 @ 关键词记
+  if (asString(action) && asString(action) !== '(未填)') return 'keyword';
+  return 'mention';
+}
+
 function mentionsForbiddenDelegate(...parts: string[]): string | null {
   const blob = parts.filter(Boolean).join('\n');
   if (!blob) return null;
@@ -175,6 +204,8 @@ function buildEntryMarkdown(params: LearnWriteParams, target: LearnTarget): stri
   const summary = asString(params.summary) || '(无摘要)';
   const trigger = asString(params.trigger) || '(未填)';
   const action = asString(params.action) || '(未填)';
+  const triggerStyle = normalizeTriggerStyle(params.triggerStyle, action);
+  const keywords = asString(params.keywords) || (triggerStyle === 'mention' ? '-' : '(未填)');
   const evidence = asString(params.evidence) || '(未填依据——不建议保留)';
   const delegateTo = resolveDelegateTo(params, action) || '(未填目标——请补昵称或@称呼)';
 
@@ -182,6 +213,8 @@ function buildEntryMarkdown(params: LearnWriteParams, target: LearnTarget): stri
     return [
       `### ${title}`,
       `- 类型：${kind}`,
+      `- 触发方式：${triggerStyle}`,
+      `- 关键词：${keywords}`,
       `- 群：${room}`,
       `- 目标：${delegateTo}`,
       `- 口令模板：${action}`,
@@ -229,6 +262,7 @@ async function ensureLearnFile(filePath: string, target: LearnTarget): Promise<v
         '# 佛系转交路由',
         '',
         '> 仅佛系模式使用。禁止目标为小聪明儿/李芈仙。',
+        '> 可记：免@关键词、要@、引用消息触发。',
         '',
         '## 路由列表',
         '',
@@ -273,7 +307,8 @@ export function registerXbotLearnWriteTool(api: OpenClawPluginApi): void {
         '切模式时必须 target=mode。',
         '材料可来自本轮上下文，或先 xbot_chat_history 查群日志再从结果学习。',
         '记 routes 时禁止目标为小聪明儿/自己/李芈仙。',
-        '优先记：指令口令；@他人且有回应；有人认真答疑；通俗说法也可记。',
+        '优先记：免@关键词触发；要@的口令；引用消息才触发的指令；@他人有回应；认真答疑。',
+        'routes 请填 triggerStyle（keyword|mention|quote|keyword+quote）和 keywords。',
       ].join(''),
       parameters: XBOT_LEARN_WRITE_PARAMETERS as never,
       async execute(_toolCallId: string, rawParams: LearnWriteParams) {
