@@ -4,7 +4,7 @@
   "private": false,
   "type": "module",
   "license": "MIT",
-  "description": "OpenClaw channel plugin for xchatbot (WeChat via xbot gateway)",
+  "description": "Thin OpenClaw channel: xchatbot inbound → agent → xchatbot outbound",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lwc--/openclaw-xbot-channel.git"

@@ -1,88 +1,14 @@
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk/core';
-import { getXbotBridge } from './src/bridge.ts';
-import { registerXbotChatHistoryTool } from './src/chat-log-tool.ts';
-import { createXbotChannelPlugin } from './src/channel-plugin.ts';
-import { XbotConfigSchema } from './src/config-schema.ts';
-import { GATEWAY_METHODS } from './src/constants.ts';
-import { registerXbotHttpRoutes } from './src/http-routes.ts';
-import { registerXbotLearnWriteTool } from './src/learn-tool.ts';
-
-type GatewayRuntime = {
-  bridge?: ReturnType<typeof getXbotBridge>;
-  serviceRegistered: boolean;
-  channelRegistered: boolean;
-  methodsRegistered: boolean;
-};
-
-const gatewayRuntimeSymbol = Symbol.for('xbot.gateway.runtime');
-
-function getGatewayRuntime(): GatewayRuntime {
-  const proc = process as NodeJS.Process & { [gatewayRuntimeSymbol]?: GatewayRuntime };
-  if (!proc[gatewayRuntimeSymbol]) {
-    proc[gatewayRuntimeSymbol] = {
-      serviceRegistered: false,
-      channelRegistered: false,
-      methodsRegistered: false,
-    };
-  }
-  return proc[gatewayRuntimeSymbol]!;
-}
-
-function getCurrentBridge(api: OpenClawPluginApi) {
-  const runtime = getGatewayRuntime();
-  if (!runtime.bridge) runtime.bridge = getXbotBridge(api);
-  return runtime.bridge;
-}
+import { XbotConfigSchema } from './src/config.ts';
+import { registerXbotPlugin } from './src/register.ts';
 
 const plugin = {
   id: 'xbot',
   name: 'Xbot',
-  description: 'xchatbot WeChat channel plugin',
+  description: 'OpenClaw channel that only talks to xchatbot',
   configSchema: XbotConfigSchema,
   register(api: OpenClawPluginApi) {
-    const runtime = getGatewayRuntime();
-    const bridge = getCurrentBridge(api);
-
-    registerXbotChatHistoryTool(api);
-    registerXbotLearnWriteTool(api);
-
-    if (!runtime.serviceRegistered) {
-      api.registerService({
-        id: 'xbot-bridge-service',
-        start: async () => {
-          await getCurrentBridge(api).start();
-        },
-        stop: async () => {
-          await getCurrentBridge(api).stop();
-        },
-      });
-      runtime.serviceRegistered = true;
-    }
-
-    if (!runtime.channelRegistered) {
-      api.registerChannel({
-        plugin: createXbotChannelPlugin(() => getCurrentBridge(api)) as never,
-      });
-      runtime.channelRegistered = true;
-    }
-
-    if (!runtime.methodsRegistered) {
-      for (const method of GATEWAY_METHODS) {
-        api.registerGatewayMethod(method, (opts) => {
-          if (method === 'xbot.connect') return bridge.handleConnect(opts);
-          if (method === 'xbot.inbound') return bridge.handleInbound(opts);
-          if (method === 'xbot.activity') return bridge.handleActivity(opts);
-          if (method === 'xbot.diagnostics') return bridge.handleDiagnostics(opts);
-          opts.respond(false, { ok: false, error: `unsupported method: ${method}` });
-        });
-      }
-      runtime.methodsRegistered = true;
-    }
-
-    // registerService start 可能晚于首条消息；这里也主动 bootstrap 一次
-    void bridge.start();
-
-    registerXbotHttpRoutes(api, () => getCurrentBridge(api));
+    registerXbotPlugin(api);
   },
 };
 

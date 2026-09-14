@@ -1,7 +1,7 @@
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk/core';
 import { recordInboundSession as sdkRecordInboundSession } from 'openclaw/plugin-sdk/conversation-runtime';
 import { resolveStorePath as sdkResolveStorePath } from 'openclaw/plugin-sdk/session-store-runtime';
-import type { XbotChannelConfigRoot } from '../types.ts';
+import type { XbotChannelConfigRoot } from './config.ts';
 
 export type OpenClawChannelRuntimeContext = Record<string, unknown> & {
   BodyForAgent?: string;
@@ -38,9 +38,7 @@ export function resolveOpenClawAgentRoute(
   },
 ): OpenClawResolvedAgentRoute {
   const routing = api?.runtime?.channel?.routing as
-    | {
-        resolveAgentRoute?: (args: typeof params) => OpenClawResolvedAgentRoute;
-      }
+    | { resolveAgentRoute?: (args: typeof params) => OpenClawResolvedAgentRoute }
     | undefined;
   if (typeof routing?.resolveAgentRoute !== 'function') {
     throw new Error('OpenClaw channel routing resolveAgentRoute API is unavailable');

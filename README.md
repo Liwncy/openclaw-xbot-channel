@@ -1,262 +1,51 @@
 # openclaw-xbot-channel
 
-OpenClaw 的 **xchatbot 微信频道**插件（`channelId=xbot`）。
+OpenClaw 只连 [xchatbot](https://github.com/lwc--/xchatbot)，不认微信 / Golem / 其它适配器。
 
-把 [xchatbot](https://github.com/lwc--/xchatbot) 的微信入站推送接到 OpenClaw Agent，出站通过 xchatbot 的 `WECHAT_API_BASE_URL` 发回微信（私聊 + 群聊）。
-
-## 架构
+哪个适配器进的消息，由 xchatbot 带 `platform`；回复也只 POST 回 xchatbot，再由对应适配器发出去。
 
 ```text
-微信消息 → xchatbot Worker (/webhook/wechat)
-         → OpenClaw Gateway (xbot.inbound)
-         → Agent 推理
-         → xchatbot /admin/xbot/outbound
-         → 微信回复（文本 / 图片 / 语音 / 视频；文件降级为链接卡片）
+适配器 → xchatbot（过滤、点名、转 URL）
+       → POST /api/channels/xbot/inbound
+       → OpenClaw Agent
+       → POST xchatbot /openclaw/outbound
+       → 原适配器发出去
 ```
 
-出站媒体按 URL 后缀、`mimeType`、`audioAsVoice` / `MEDIA` 标记自动分类；本机音频会读成 base64 并尽量转成 SILK，经 xchatbot `/admin/xbot/outbound` 发成**语音气泡**。本地文件内联上限 **8MB**；更大的视频/文件请用公网 `http(s)` URL（Worker 走 CDN/`sendVideo`）。
+## 职责
 
-与 `agent-bridge` 插件的区别：
+| 谁 | 做什么 |
+|---|---|
+| **xchatbot** | 所有适配器进出、过滤、媒体 URL、`/openclaw/outbound` |
+| **本频道** | 收 inbound、跑 Agent、把回复 POS 回 xchatbot |
 
-- **agent-bridge**：用户手动触发「聪明办事」，单向拉 OpenClaw
-- **xbot channel**：全量入站（按策略过滤）+ 标准 OpenClaw 频道出站
-
-## 安装
-
-```bash
-# 本地路径安装（开发）
-openclaw plugins install /path/to/openclaw-xbot-channel
-openclaw plugins enable xbot
-openclaw gateway restart
-```
-
-## 配置示例
-
-在 OpenClaw 配置中加入：
+## 配置
 
 ```json
 {
   "channels": {
     "xbot": {
       "enabled": true,
-      "wechatApiBaseUrl": "https://your-xchatbot-worker.example.com",
-      "botWechatId": "wxid_your_bot",
-      "botWechatName": "小聪明儿",
-      "dmPolicy": "open",
-      "groupPolicy": "allowlist",
-      "groupAllowFrom": ["12345678@chatroom"],
-      "requireMention": true,
-      "groupReplyMode": "mention",
-      "historyLimit": 50,
-      "historyForce": true,
+      "xchatbotApiBaseUrl": "https://xbot.example.com",
+      "xchatbotToken": "<same as AGENT_BRIDGE_TOKEN>",
+      "botName": "小聪明儿",
       "accounts": {
-        "Primary": {
-          "enabled": true,
-          "name": "WeChat Bot"
-        }
+        "Primary": { "enabled": true, "name": "小聪明儿" }
       }
     }
   }
 }
 ```
 
-| 字段 | 说明 |
-|------|------|
-| `wechatApiBaseUrl` | xchatbot 对外 API 根地址（与 Worker 环境变量 `WECHAT_API_BASE_URL` 一致） |
-| `botWechatId` | 机器人 wxid，用于群聊 @ 检测 |
-| `dmPolicy` | 私聊：`open` / `allowlist` / `disabled` |
-| `groupPolicy` | 群聊：`open` / `allowlist` / `disabled` |
-| `requireMention` | 兼容字段；未设 `groupReplyMode` 时：`true`→`mention`，`false`→`all` |
-| `groupReplyMode` | `mention`（默认）：群消息都攒历史，仅点名/提到昵称才回复；`all`：每条都回复 |
-| `historyLimit` | 群 pending 历史条数上限（默认 `50`） |
-| `historyForce` | 窗满是否静默 flush 进 session（默认 `true`）；`false` 则只滑动丢旧消息 |
-| `injectChatContext` | 触发 OpenClaw 时是否注入 D1 近期聊天上下文（默认 `true`） |
-| `contextHistoryLimit` | 注入的近期消息条数上限（默认 `20`） |
-| `contextMaxChars` | 注入上下文总字数上限（默认 `4000`） |
-| `chatLogApiBaseUrl` | xchatbot 根地址（出站 `/admin/xbot/outbound` + 查 D1）；默认回退 `wechatApiBaseUrl` |
-| `chatLogAdminToken` | Worker `ADMIN_TOKEN`；**出站必填**（或靠入站 connect 透传到 replyTarget） |
-| `blockStreaming` | 是否把中间回复发到微信（如调技能前的说明），默认 `true` |
-| `allowTool` | 是否把 tool 结果也发到微信，默认 `false` |
+`wechatApiBaseUrl` 已废弃，可以删。
 
-### 出站可靠性
+## 入站
 
-统一管线：`preflight → xchatbot outbound →（可重试失败）HTTP outbox`。
+xchatbot POST `/api/channels/xbot/inbound`，必须带 `platform`（如 `golem`、`web`）。
 
-投递阶段（对 Agent/工具诚实，只有前两种算成功）：
+## 出站
 
-| stage | 含义 |
-|-------|------|
-| `wechat-ok` | 本批全部送达 |
-| `deduped` | 短时重复，跳过 |
-| `partial` | 部分送达；未送达项可入 outbox 重试 |
-| `queued` | 同步失败已入队，后台重试 |
-| `failed` | 全部失败或本地预处理失败 |
-| `unconfigured` | 未配 Worker；仅文本/公网图视频可直连 |
-
-状态目录：`~/.openclaw/xbot/outbox.json`（pending / dead-letter）。
-
-```bash
-openclaw gateway call xbot.diagnostics
-```
-
-### MEDIA / XbotParam
-
-文本里可夹媒体标记（会被剥掉再当 caption）：
-
-```text
-MEDIA:C:\tmp\a.jpg
-MEDIA:voice|C:\tmp\v.mp3
-MEDIA:video:https://cdn.example.com/clip.mp4
-[[audio_as_voice]]
-[XbotParam:{"asVoice":true,"type":"voice","path":"C:\\tmp\\v.mp3"}]
-```
-
-`voice` / `asVoice` → 语音气泡；大文件请给公网 URL，不要塞本地超大路径。
-
-### 近期聊天上下文
-
-每次真正分发给 Agent 时（非静默 history flush），频道会先查 xchatbot `/admin/chat-log/query`，把近期群/私聊记录拼进正文：
-
-```text
-[近期聊天上下文，供理解；请回复最后一条]
-群成员「张三(wxid_xxx)」说：……
-机器人：……
-[当前消息]
-群成员「李四(wxid_yyy)」说：@小聪明儿 帮我看看
-```
-
-查询失败时回退到原来的内存 pending / 仅当前消息，不阻断回复。更深的按时间窗查询仍可用工具 `xbot_chat_history`。
-
-### 群聊行为（对齐 BNCR）
-
-- **`mention`**：白名单群里每条消息都会进插件；未点名 → 只写入内存 pending（带昵称 + wxid）；点名 → 把 pending 拼进上下文再跑 Agent，然后清空窗口。
-- **`all`**：每条都跑 Agent，不攒 pending。
-- **`historyForce`**（默认开）：pending 满 `historyLimit` 时，自动跑一轮 Agent 把这批写进 session，要求输出 `NO_REPLY`，**微信不发消息**；然后清空窗口继续攒。关掉则只丢最老消息。
-- Agent 看到的正文类似：`群成员「张三(wxid_xxx)」说：…`，大群能区分人。
-
-注意：pending 是 **Gateway 进程内存**里的短窗（默认 50），重启会丢；静默 flush 会把批次沉进 OpenClaw session。当天全量统计仍靠 xchatbot D1 `chat_log`。
-
-默认会开启 **block streaming**（`text_end` 断点、`minChars: 1`），调 Skill/工具前的说明句会先发一条微信，最终答案再发一条。若要关闭中间消息、只发最终回复：
-
-```json
-{
-  "channels": {
-    "xbot": {
-      "blockStreaming": false
-    }
-  }
-}
-```
-
-## Gateway 方法
-
-xchatbot Worker 通过 **Gateway HTTP 路由**（推荐）或 WebSocket RPC 推送消息。
-
-### HTTP 路由（推荐，适合 Cloudflare Worker）
-
-需 Gateway Bearer Token（与 `AGENT_BRIDGE_TOKEN` 相同）：
-
-| 路由 | 说明 |
-|------|------|
-| `POST /api/channels/xbot/connect` | 登记推送端在线 |
-| `POST /api/channels/xbot/inbound` | 推送入站消息 |
-| `POST /api/channels/xbot/activity` | 可选心跳 |
-
-```bash
-curl -sS http://<gateway-host>:<port>/api/channels/xbot/inbound \
-  -H "Authorization: Bearer <gateway-token>" \
-  -H "Content-Type: application/json" \
-  -d '{"messageId":"1","source":"private","from":"wxid_x","conversationId":"wxid_x","type":"text","content":"你好"}'
-```
-
-xchatbot 在 `XBOT_CHANNEL_ENABLED=true` 时会自动调用以上路由。
-
-### WebSocket RPC（可选）
-
-若客户端支持长连接，也可直接调用 `xbot.connect` / `xbot.inbound` / `xbot.activity`。
-
-### `xbot.connect`
-
-Worker 启动或定时心跳时调用，登记推送端在线状态。
-
-```json
-{
-  "accountId": "Primary",
-  "clientId": "xchatbot-worker",
-  "connId": "xchatbot-worker-1",
-  "wechatApiBaseUrl": "https://your-xchatbot-worker.example.com"
-}
-```
-
-`wechatApiBaseUrl` 可覆盖配置里的值（适合 Worker 自报地址）。
-
-### `xbot.inbound`
-
-推送标准化入站消息：
-
-```json
-{
-  "accountId": "Primary",
-  "clientId": "xchatbot-worker",
-  "connId": "xchatbot-worker-1",
-  "messageId": "1234567890",
-  "source": "group",
-  "from": "wxid_sender",
-  "senderName": "张三",
-  "roomId": "12345678@chatroom",
-  "type": "text",
-  "content": "wxid_sender:\n@小聪明儿 你好",
-  "timestamp": 1710000000000,
-  "mentions": ["wxid_bot"],
-  "botMentioned": true
-}
-```
-
-私聊示例：
-
-```json
-{
-  "messageId": "9876543210",
-  "source": "private",
-  "from": "wxid_friend",
-  "senderName": "李四",
-  "conversationId": "wxid_friend",
-  "type": "text",
-  "content": "在吗"
-}
-```
-
-### `xbot.activity`
-
-可选心跳，刷新连接 `lastActivityAt`。
-
-### `xbot.diagnostics`
-
-查看桥接状态与 outbox：
-
-```bash
-openclaw gateway call xbot.diagnostics
-```
-
-返回字段含 `bridgeId`、`connections`、`replyTargets`、`outbox.pending` / `deadLetter` 及预览。
-
-## xchatbot 侧对接
-
-在 xchatbot Worker 环境变量中配置：
-
-```bash
-XBOT_CHANNEL_ENABLED=true
-# 可选，默认同 AGENT_BRIDGE_BASE_URL / AGENT_BRIDGE_TOKEN
-XBOT_CHANNEL_GATEWAY_URL=http://127.0.0.1:18789
-XBOT_CHANNEL_GATEWAY_TOKEN=<gateway-token>
-```
-
-启用后，webhook 会：
-
-1. 调用 `xbot.connect`（附带 `wechatApiBaseUrl`）
-2. 对每条白名单消息调用 `xbot.inbound`
-3. 若 OpenClaw 已分发（`dispatched=true`），跳过本地插件，避免双回复
-4. 若策略忽略或转发失败，回退本地插件链（点歌等仍可用）
+频道 POST `{xchatbotApiBaseUrl}/openclaw/outbound`，Bearer 为 `xchatbotToken`。
 
 ## 开发
 
@@ -266,12 +55,3 @@ npm run typecheck
 npm run selfcheck
 npm run build
 ```
-
-## 兼容
-
-- `openclaw >= 2026.5.27`
-- 参照 [openclaw-bncr-channel](https://github.com/xmoxmo/openclaw-bncr-channel) 的频道插件结构
-
-## License
-
-MIT

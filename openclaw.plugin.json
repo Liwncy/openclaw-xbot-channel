@@ -2,92 +2,23 @@
   "id": "xbot",
   "name": "Xbot",
   "channels": ["xbot"],
-  "contracts": {
-    "tools": ["xbot_chat_history", "xbot_learn_write"]
-  },
   "configSchema": {
     "type": "object",
     "additionalProperties": true,
     "properties": {
       "enabled": { "type": "boolean" },
-      "wechatApiBaseUrl": {
+      "xchatbotApiBaseUrl": {
         "type": "string",
-        "description": "xchatbot WeChat API base URL, e.g. https://your-worker.example.com"
+        "description": "xchatbot Worker origin, e.g. https://xbot.example.com"
       },
-      "chatLogApiBaseUrl": {
+      "xchatbotToken": {
         "type": "string",
-        "description": "xchatbot admin base URL for chat log query; defaults to wechatApiBaseUrl"
+        "description": "Bearer token, same as xchatbot XBOT_CHANNEL_GATEWAY_TOKEN / AGENT_BRIDGE_TOKEN"
       },
-      "chatLogAdminToken": {
+      "botName": {
         "type": "string",
-        "description": "Bearer token for xchatbot /admin/chat-log/query, usually same as xchatbot ADMIN_TOKEN"
+        "description": "Display name"
       },
-      "botWechatId": {
-        "type": "string",
-        "description": "Bot wxid for group @mention detection"
-      },
-      "botWechatName": {
-        "type": "string",
-        "description": "Bot display name shown in channel status"
-      },
-      "injectChatContext": {
-        "type": "boolean",
-        "default": true,
-        "description": "When dispatching to OpenClaw, inject recent D1 chat history into the agent body"
-      },
-      "contextHistoryLimit": {
-        "type": "number",
-        "default": 20,
-        "description": "Max recent D1 messages to inject as chat context"
-      },
-      "contextMaxChars": {
-        "type": "number",
-        "default": 4000,
-        "description": "Max total characters for injected D1 chat context"
-      },
-      "dmPolicy": {
-        "type": "string",
-        "enum": ["open", "allowlist", "disabled"]
-      },
-      "groupPolicy": {
-        "type": "string",
-        "enum": ["open", "allowlist", "disabled"]
-      },
-      "allowFrom": {
-        "type": "array",
-        "items": { "type": "string" }
-      },
-      "groupAllowFrom": {
-        "type": "array",
-        "items": { "type": "string" }
-      },
-      "requireMention": {
-        "type": "boolean",
-        "default": true,
-        "description": "Legacy: when groupReplyMode unset, true→mention mode, false→all"
-      },
-      "ownerAllowFrom": {
-        "type": "array",
-        "items": { "type": "string" },
-        "description": "Owner wxids for colloquial native-command aliases and OwnerAllowFrom"
-      },
-      "groupReplyMode": {
-        "type": "string",
-        "enum": ["mention", "all"],
-        "description": "mention: accumulate all group msgs, reply only on @/name; all: reply every msg"
-      },
-      "historyLimit": {
-        "type": "number",
-        "default": 50,
-        "description": "Pending group history window size"
-      },
-      "historyForce": {
-        "type": "boolean",
-        "default": true,
-        "description": "When pending window is full, silently flush into session (NO_REPLY, no WeChat send)"
-      },
-      "blockStreaming": { "type": "boolean" },
-      "allowTool": { "type": "boolean" },
       "accounts": {
         "type": "object",
         "additionalProperties": {
@@ -108,43 +39,9 @@
         "additionalProperties": true,
         "properties": {
           "enabled": { "type": "boolean" },
-          "wechatApiBaseUrl": { "type": "string" },
-          "chatLogApiBaseUrl": { "type": "string" },
-          "chatLogAdminToken": { "type": "string" },
-          "botWechatId": { "type": "string" },
-          "botWechatName": { "type": "string" },
-          "injectChatContext": { "type": "boolean" },
-          "contextHistoryLimit": { "type": "number" },
-          "contextMaxChars": { "type": "number" },
-          "dmPolicy": {
-            "type": "string",
-            "enum": ["open", "allowlist", "disabled"]
-          },
-          "groupPolicy": {
-            "type": "string",
-            "enum": ["open", "allowlist", "disabled"]
-          },
-          "allowFrom": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
-          "groupAllowFrom": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
-          "requireMention": { "type": "boolean" },
-          "ownerAllowFrom": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
-          "groupReplyMode": {
-            "type": "string",
-            "enum": ["mention", "all"]
-          },
-          "historyLimit": { "type": "number" },
-          "historyForce": { "type": "boolean" },
-          "blockStreaming": { "type": "boolean" },
-          "allowTool": { "type": "boolean" },
+          "xchatbotApiBaseUrl": { "type": "string" },
+          "xchatbotToken": { "type": "string" },
+          "botName": { "type": "string" },
           "accounts": {
             "type": "object",
             "additionalProperties": {
