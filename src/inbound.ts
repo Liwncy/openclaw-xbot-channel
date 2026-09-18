@@ -18,6 +18,7 @@ import {
   type OpenClawReplyDispatchInfo,
   type OpenClawReplyDispatcherPayload,
 } from './runtime.ts';
+import { isContextOverflowAlreadyReset, isContextOverflowNotice } from './overflow.ts';
 import { mapOpenClawPayloadToReplies, resolveOutboundReceiver, sendReplies } from './outbound.ts';
 
 function asString(v: unknown, fallback = ''): string {
@@ -95,17 +96,30 @@ function shouldDeliver(payload: OpenClawReplyDispatcherPayload, info?: OpenClawR
   return info?.kind === 'final' || info?.kind == null;
 }
 
+export type XbotInboundDispatchResult = {
+  dispatched: boolean;
+  sessionKey?: string;
+  agentId?: string;
+  reason?: string;
+  overflowNotice?: boolean;
+  overflowAlreadyReset?: boolean;
+};
+
 export async function dispatchXbotInbound(args: {
   api: OpenClawPluginApi;
   cfg: XbotChannelConfigRoot;
   parsed: ParsedXbotInbound;
+  retryNonce?: string;
   resolvedRouteOverride?: {
     sessionKey?: string;
     mainSessionKey?: string;
     agentId?: string;
   };
-}): Promise<{ dispatched: boolean; sessionKey?: string; reason?: string }> {
-  const { api, cfg, parsed } = args;
+}): Promise<XbotInboundDispatchResult> {
+  const { api, cfg } = args;
+  const parsed = args.retryNonce
+    ? { ...args.parsed, messageId: `${args.parsed.messageId}:${args.retryNonce}` }
+    : args.parsed;
   const resolvedRoute = args.resolvedRouteOverride || resolveOpenClawAgentRoute(api, {
     cfg,
     channel: CHANNEL_ID,
@@ -225,6 +239,15 @@ export async function dispatchXbotInbound(args: {
     replyToMessageId: parsed.messageId,
   };
 
+  let overflowNotice = false;
+  let overflowAlreadyReset = false;
+
+  const markOverflow = (text: unknown) => {
+    overflowNotice = true;
+    if (isContextOverflowAlreadyReset(text)) overflowAlreadyReset = true;
+    api.logger?.warn?.(`[xbot] swallowed context overflow notice for ${sessionKey}`);
+  };
+
   const runResult = (await inboundRuntime.run({
     channel: CHANNEL_ID,
     accountId: parsed.accountId,
@@ -264,8 +287,19 @@ export async function dispatchXbotInbound(args: {
           cfg,
           dispatcherOptions: {
             deliver: async (payload, info) => {
+              if (isContextOverflowNotice(payload.text)) {
+                markOverflow(payload.text);
+                return;
+              }
               if (!shouldDeliver(payload, info)) return;
               const replies = mapOpenClawPayloadToReplies(payload);
+              const overflowReply = replies.find(
+                (reply) => reply.type === 'text' && isContextOverflowNotice(reply.content),
+              );
+              if (overflowReply && overflowReply.type === 'text') {
+                markOverflow(overflowReply.content);
+                return;
+              }
               if (replies.length === 0) return;
               await sendReplies({
                 cfg,
@@ -296,6 +330,11 @@ export async function dispatchXbotInbound(args: {
   return {
     dispatched,
     sessionKey,
-    reason: dispatched ? undefined : runResult?.admission?.reason || runResult?.admission?.kind || 'not-dispatched',
+    agentId,
+    overflowNotice,
+    overflowAlreadyReset,
+    reason: overflowNotice
+      ? 'context-overflow'
+      : dispatched ? undefined : runResult?.admission?.reason || runResult?.admission?.kind || 'not-dispatched',
   };
 }

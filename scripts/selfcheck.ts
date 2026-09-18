@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { parseXbotInboundParams } from '../src/inbound.ts';
 import { mapOpenClawPayloadToReplies, normalizeOutboundText } from '../src/outbound.ts';
+import {
+  isContextOverflowAlreadyReset,
+  isContextOverflowError,
+  isContextOverflowNotice,
+} from '../src/overflow.ts';
 
 {
   const parsed = parseXbotInboundParams({
@@ -70,3 +75,28 @@ assert.equal(
   '画好了\nimage:https://cdn.example.com/a.jpg',
 );
 console.log('✓ text normalize');
+
+assert.equal(
+  isContextOverflowNotice(
+    '⚠️ Context is too large and auto-compaction could not recover this turn. Try again, use /compact, or use /new to start a fresh session.',
+  ),
+  true,
+);
+assert.equal(
+  isContextOverflowNotice(
+    '⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session.',
+  ),
+  true,
+);
+assert.equal(isContextOverflowNotice('好了，撤了'), false);
+assert.equal(
+  isContextOverflowAlreadyReset(
+    "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.",
+  ),
+  true,
+);
+assert.equal(
+  isContextOverflowError(new Error('Context is too large and auto-compaction could not recover this turn.')),
+  true,
+);
+console.log('✓ overflow notice detect');

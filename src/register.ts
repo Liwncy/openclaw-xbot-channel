@@ -23,7 +23,8 @@ import {
   type XbotChannelConfigRoot,
   type XbotReplyTarget,
 } from './config.ts';
-import { dispatchXbotInbound, parseXbotInboundParams } from './inbound.ts';
+import { dispatchXbotInbound, parseXbotInboundParams, type XbotInboundDispatchResult } from './inbound.ts';
+import { isContextOverflowError, OVERFLOW_RETRY_REPLY, resetXbotSession } from './overflow.ts';
 import { buildExplicitTarget, parseExplicitTarget, sendXbotMedia, sendXbotText } from './outbound.ts';
 import { resolveOpenClawAgentRoute } from './runtime.ts';
 
@@ -92,11 +93,10 @@ export class XbotBridge {
         accountId: parsed.accountId,
         peer: parsed.peer,
       });
-      const result = await dispatchXbotInbound({
-        api: this.api,
+      const result = await this.dispatchInboundWithOverflowRecovery({
         cfg,
         parsed,
-        resolvedRouteOverride: route,
+        route,
       });
       if (result.sessionKey) {
         this.replyTargets.set(result.sessionKey, {
@@ -125,6 +125,80 @@ export class XbotBridge {
       });
     }
   };
+
+  private async dispatchInboundWithOverflowRecovery(args: {
+    cfg: XbotChannelConfigRoot;
+    parsed: ReturnType<typeof parseXbotInboundParams>;
+    route: ReturnType<typeof resolveOpenClawAgentRoute>;
+  }): Promise<XbotInboundDispatchResult> {
+    const run = (retryNonce?: string) => dispatchXbotInbound({
+      api: this.api,
+      cfg: args.cfg,
+      parsed: args.parsed,
+      resolvedRouteOverride: args.route,
+      ...(retryNonce ? { retryNonce } : {}),
+    });
+
+    let result: XbotInboundDispatchResult;
+    try {
+      result = await run();
+    } catch (error) {
+      if (!isContextOverflowError(error)) throw error;
+      result = {
+        dispatched: false,
+        sessionKey: args.route.sessionKey,
+        agentId: args.route.agentId,
+        overflowNotice: true,
+        reason: 'context-overflow',
+      };
+    }
+
+    if (!result.overflowNotice) return result;
+
+    const sessionKey = String(result.sessionKey || args.route.sessionKey || '').trim();
+    const agentId = String(result.agentId || args.route.agentId || '').trim();
+    this.api.logger?.warn?.(
+      `[xbot] context overflow on ${sessionKey || 'unknown-session'}, resetting and retrying`,
+    );
+    if (sessionKey && !result.overflowAlreadyReset) {
+      try {
+        await resetXbotSession({ sessionKey, ...(agentId ? { agentId } : {}) });
+      } catch (error) {
+        this.api.logger?.warn?.(
+          `[xbot] sessions.reset failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    try {
+      result = await run('overflow-retry');
+    } catch (error) {
+      if (!isContextOverflowError(error)) throw error;
+      result = {
+        dispatched: false,
+        sessionKey,
+        agentId,
+        overflowNotice: true,
+        reason: 'context-overflow',
+      };
+    }
+
+    if (!result.overflowNotice) return result;
+
+    this.api.logger?.warn?.(`[xbot] context overflow persisted after reset on ${sessionKey || 'unknown-session'}`);
+    await sendXbotText({
+      cfg: args.cfg,
+      accountId: args.parsed.accountId,
+      to: args.parsed.route.to,
+      text: OVERFLOW_RETRY_REPLY,
+      route: args.parsed.route,
+    });
+    return {
+      ...result,
+      dispatched: true,
+      reason: 'context-overflow-reset',
+    };
+  }
 
   channelSendText = async (ctx: { accountId?: string | null; to?: string; text?: string }) =>
     sendXbotText({
