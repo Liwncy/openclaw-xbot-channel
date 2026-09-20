@@ -161,6 +161,21 @@ function trimBaseUrl(url: string): string {
   return url.trim().replace(/\/+$/u, '');
 }
 
+function sanitizeOutboundReplies(replies: XchatbotReply[]): XchatbotReply[] {
+  const out: XchatbotReply[] = [];
+  for (const reply of replies) {
+    if (reply.type !== 'text') {
+      out.push(reply);
+      continue;
+    }
+    if (looksLikeToolDraft(reply.content)) continue;
+    const content = normalizeOutboundText(reply.content);
+    if (!content || looksLikeToolDraft(content)) continue;
+    out.push({ type: 'text', content });
+  }
+  return out;
+}
+
 export async function sendReplies(args: {
   cfg: XbotChannelConfigRoot;
   route: XbotRoute;
@@ -172,7 +187,8 @@ export async function sendReplies(args: {
   const token = resolveXchatbotToken(args.cfg);
   if (!apiBase) throw new Error('xchatbotApiBaseUrl is not configured');
   if (!token) throw new Error('xchatbotToken is not configured');
-  if (args.replies.length === 0) {
+  const replies = sanitizeOutboundReplies(args.replies);
+  if (replies.length === 0) {
     return emptySendResult();
   }
   if (!args.route.platform) throw new Error('platform is required');
@@ -189,7 +205,7 @@ export async function sendReplies(args: {
       from: args.route.userId || args.route.to,
       roomId: args.route.groupId,
       messageId: args.replyToMessageId,
-      replies: args.replies,
+      replies,
     }),
   });
   const raw = await response.json().catch(() => null) as { ok?: boolean; sentCount?: number; error?: string } | null;
@@ -314,7 +330,7 @@ function tidyBlankLines(text: string): string {
     .trim();
 }
 
-function looksLikeToolDraft(text: string): boolean {
+export function looksLikeToolDraft(text: string): boolean {
   return TOOL_XML_TAGS.some((tag) => new RegExp(`<${tag}\\b`, 'i').test(text));
 }
 

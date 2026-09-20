@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { parseXbotInboundParams } from '../src/inbound.ts';
-import { mapOpenClawPayloadToReplies, normalizeOutboundText } from '../src/outbound.ts';
+import {
+  looksLikeToolDraft,
+  mapOpenClawPayloadToReplies,
+  normalizeOutboundText,
+} from '../src/outbound.ts';
 import {
   isContextOverflowAlreadyReset,
   isContextOverflowError,
@@ -97,6 +101,8 @@ assert.equal(
 assert.equal(normalizeOutboundText('NO_REPLY'), '');
 assert.equal(normalizeOutboundText('[ERROR] TypeError: x'), '');
 assert.equal(normalizeOutboundText('voice-clip.silk'), '');
+assert.equal(looksLikeToolDraft('<invoke name="emoji_get"></invoke>'), true);
+assert.equal(looksLikeToolDraft('NO_REPLY'), false);
 console.log('✓ text normalize');
 
 assert.equal(
