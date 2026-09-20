@@ -74,6 +74,29 @@ assert.equal(
   normalizeOutboundText('画好了\nimage:https://cdn.example.com/a.jpg'),
   '画好了\nimage:https://cdn.example.com/a.jpg',
 );
+assert.equal(
+  normalizeOutboundText('<invoke name="emoji_get"><parameter name="md5">abc</parameter></invoke>'),
+  '',
+);
+assert.equal(
+  normalizeOutboundText('吃了吗\n<invoke name="read"><parameter name="file_path">x</parameter></invoke>'),
+  '吃了吗',
+);
+assert.equal(
+  normalizeOutboundText('<tool_use name="emoji_get"><parameter name="md5">abc</parameter></tool_use>'),
+  '',
+);
+assert.equal(
+  normalizeOutboundText('[Advisor review]\nThe assistant should: call the tool.\n吃了吗'),
+  '吃了吗',
+);
+assert.equal(
+  normalizeOutboundText('[系统提示：群聊随机接话] 不要输出 NO_REPLY [/系统提示]\n在吗'),
+  '在吗',
+);
+assert.equal(normalizeOutboundText('NO_REPLY'), '');
+assert.equal(normalizeOutboundText('[ERROR] TypeError: x'), '');
+assert.equal(normalizeOutboundText('voice-clip.silk'), '');
 console.log('✓ text normalize');
 
 assert.equal(

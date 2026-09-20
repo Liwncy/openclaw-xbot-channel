@@ -240,7 +240,10 @@ export async function sendXbotText(args: {
 }): Promise<XbotSendResult> {
   void normalizeAccountId(args.accountId);
   const text = normalizeOutboundText(args.text);
-  if (!text) throw new Error('text is required');
+  if (!text) {
+    if (looksLikeRejectedDraft(args.text)) return emptySendResult();
+    throw new Error('text is required');
+  }
   return sendReplies({
     cfg: args.cfg,
     route: resolveRoute(args.to, args.route),
@@ -281,9 +284,78 @@ export async function sendXbotMedia(args: {
   });
 }
 
-function stripInternalMarkers(text: string): string {
-  let s = String(text);
+const TOOL_XML_TAGS = [
+  'invoke',
+  'parameter',
+  'function_calls',
+  'function_call',
+  'tool_calls',
+  'tool_call',
+  'tool_use',
+  'thinking',
+  'antthinking',
+] as const;
 
+const ADVISOR_MARK = /\[Advisor\b/i;
+const SYSTEM_HINT_MARK = /\[系统提示：/;
+const AUDIO_FILENAME = /^[A-Za-z0-9._\-]+\.(wav|mp3|m4a|ogg|silk|slk)$/i;
+const ENGLISH_ADVISOR_LEADS = [
+  'The user is asking',
+  'The assistant should:',
+  'Keep the tone',
+  'The executor is stuck',
+] as const;
+
+function tidyBlankLines(text: string): string {
+  return text
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function looksLikeToolDraft(text: string): boolean {
+  return TOOL_XML_TAGS.some((tag) => new RegExp(`<${tag}\\b`, 'i').test(text));
+}
+
+function looksLikeAdvisorLeak(text: string): boolean {
+  if (ADVISOR_MARK.test(text)) return true;
+  return ENGLISH_ADVISOR_LEADS.some((lead) => text.toLowerCase().includes(lead.toLowerCase()));
+}
+
+function looksLikeSystemEcho(text: string): boolean {
+  return SYSTEM_HINT_MARK.test(text) || /^\s*NO_REPLY\s*$/im.test(text);
+}
+
+function looksLikeErrorDump(text: string): boolean {
+  return /^\s*\[ERROR\]/im.test(text) || /^\s*Error code=/im.test(text);
+}
+
+/** 整段都是内部废稿、不该发到微信。 */
+export function looksLikeRejectedDraft(text: string): boolean {
+  const raw = String(text || '');
+  if (!raw.trim()) return false;
+  return looksLikeToolDraft(raw)
+    || looksLikeAdvisorLeak(raw)
+    || looksLikeSystemEcho(raw)
+    || looksLikeErrorDump(raw)
+    || AUDIO_FILENAME.test(raw.trim());
+}
+
+function stripNamedXmlBlocks(text: string, names: readonly string[]): string {
+  let s = text;
+  for (const name of names) {
+    s = s.replace(new RegExp(`<${name}\\b[^>]*>[\\s\\S]*?<\\/${name}>`, 'gi'), '\n');
+    s = s.replace(new RegExp(`<\\/?${name}\\b[^>]*>`, 'gi'), '\n');
+    if (new RegExp(`<${name}\\b`, 'i').test(s)) {
+      s = s.replace(new RegExp(`<${name}\\b[\\s\\S]*$`, 'gi'), '\n');
+    }
+  }
+  return s;
+}
+
+function stripAdvisorLeak(text: string): string {
+  let s = text;
   s = s.replace(
     /\[Advisor consultation #\d+\][\s\S]*?\[End of advisor consultation #\d+\]/gi,
     '\n',
@@ -292,43 +364,47 @@ function stripInternalMarkers(text: string): string {
     /\[Advisor consultation #\d+\][\s\S]*?(?=(?:^|\n)[\u4e00-\u9fff])/gim,
     '\n',
   );
-  s = s.replace(
-    /\[Advisor consultation #\d+\][\s\S]*$/gim,
-    '\n',
-  );
-
+  s = s.replace(/\[Advisor consultation #\d+\][\s\S]*$/gim, '\n');
   s = s
     .replace(/\[End of advisor consultation #\d+\]/gi, '')
     .replace(/\[Advisor consultation #\d+\]/gi, '')
     .replace(/\[Advisor review\]/gi, '')
     .replace(/\[Advisor[^\]]*\]/gi, '');
 
-  s = s.replace(
-    /(?:^|\n)\s*The user is asking[\s\S]*?(?=(?:^|\n)[\u4e00-\u9fff]|$)/gim,
-    '\n',
-  );
-  s = s.replace(
-    /(?:^|\n)\s*The assistant should:[\s\S]*?(?=(?:^|\n)[\u4e00-\u9fff]|$)/gim,
-    '\n',
-  );
-  s = s.replace(
-    /(?:^|\n)\s*Keep the tone[\s\S]*?(?=(?:^|\n)[\u4e00-\u9fff]|$)/gim,
-    '\n',
-  );
-  s = s.replace(
-    /(?:^|\n)\s*The executor is stuck[\s\S]*?(?=(?:^|\n)[\u4e00-\u9fff]|$)/gim,
-    '\n',
-  );
-
-  if (/^[A-Za-z0-9._\-]+\.(wav|mp3|m4a|ogg|silk|slk)$/i.test(s.trim())) {
-    return '';
+  for (const lead of ENGLISH_ADVISOR_LEADS) {
+    const escaped = lead.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    s = s.replace(
+      new RegExp(`(?:^|\\n)\\s*${escaped}[\\s\\S]*?(?=(?:^|\\n)[\\u4e00-\\u9fff]|$)`, 'gim'),
+      '\n',
+    );
   }
+  return s;
+}
 
-  return s
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n[ \t]+/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+function stripSystemEcho(text: string): string {
+  return text
+    .replace(/\[系统提示：[\s\S]*?\[\/系统提示\]/g, '\n')
+    .replace(/\[系统提示：[\s\S]*$/g, '\n')
+    .replace(/^\s*NO_REPLY\s*$/gim, '');
+}
+
+function stripErrorDump(text: string): string {
+  return text
+    .replace(/^\s*\[ERROR\][^\n]*/gim, '')
+    .replace(/^\s*Error code=\S+[^\n]*/gim, '');
+}
+
+/** 工具草稿、顾问旁白、系统回声、报错堆字，一律剥掉。 */
+export function stripRejectedDraft(text: string): string {
+  if (!text) return text;
+  let s = String(text);
+  s = stripNamedXmlBlocks(s, TOOL_XML_TAGS);
+  s = stripAdvisorLeak(s);
+  s = stripSystemEcho(s);
+  s = stripErrorDump(s);
+  s = tidyBlankLines(s);
+  if (AUDIO_FILENAME.test(s)) return '';
+  return s;
 }
 
 function stripCodeFences(text: string): string {
@@ -464,8 +540,8 @@ export function normalizeOutboundText(text: string): string {
   if (!text) return '';
 
   let s = String(text);
-  s = stripInternalMarkers(s);
   s = stripCodeFences(s);
+  s = stripRejectedDraft(s);
   s = convertMarkdownBlocks(s);
   s = stripInlineMarkdown(s);
   s = s.replace(/[\u2028\u2029\u0085]/g, '\n');
