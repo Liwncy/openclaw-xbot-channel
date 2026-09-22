@@ -344,7 +344,12 @@ function looksLikeSystemEcho(text: string): boolean {
 }
 
 function looksLikeErrorDump(text: string): boolean {
-  return /^\s*\[ERROR\]/im.test(text) || /^\s*Error code=/im.test(text);
+  const raw = String(text || '').trim();
+  if (!raw) return false;
+  return /^\s*\[ERROR\]/im.test(raw)
+    || /^\s*Error code=/im.test(raw)
+    || /agent run failed/i.test(raw)
+    || /finish_reason:\s*content_filter/i.test(raw);
 }
 
 /** 整段都是内部废稿、不该发到微信。 */
@@ -407,7 +412,8 @@ function stripSystemEcho(text: string): string {
 function stripErrorDump(text: string): string {
   return text
     .replace(/^\s*\[ERROR\][^\n]*/gim, '')
-    .replace(/^\s*Error code=\S+[^\n]*/gim, '');
+    .replace(/^\s*Error code=\S+[^\n]*/gim, '')
+    .replace(/^\s*⚠️?\s*Agent run failed[^\n]*/gim, '');
 }
 
 /** 工具草稿、顾问旁白、系统回声、报错堆字，一律剥掉。 */
@@ -423,147 +429,7 @@ export function stripRejectedDraft(text: string): string {
   return s;
 }
 
-function stripCodeFences(text: string): string {
-  return text.replace(/```[\w-]*\r?\n?([\s\S]*?)```/g, (_m, body: string) => {
-    const inner = String(body || '').replace(/\s+$/g, '').replace(/^\s+/g, '');
-    return inner ? `\n${inner}\n` : '';
-  });
-}
-
-function stripInlineMarkdown(text: string): string {
-  return text
-    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt: string, url: string) => {
-      const a = String(alt || '').trim();
-      const u = String(url || '').trim();
-      return a || u;
-    })
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label: string, url: string) => {
-      const t = String(label || '').trim();
-      const u = String(url || '').trim();
-      if (!t) return u;
-      if (!u || t === u) return t;
-      return `${t}（${u}）`;
-    })
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/__([^_]+)__/g, '$1')
-    .replace(/(?<!\w)\*([^*\n]+)\*(?!\w)/g, '$1')
-    .replace(/(?<!\w)_([^_\n]+)_(?!\w)/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/~~([^~]+)~~/g, '$1');
-}
-
-function convertMarkdownBlocks(text: string): string {
-  const lines = text.replace(/\r\n?/g, '\n').split('\n');
-  const out: string[] = [];
-
-  for (const rawLine of lines) {
-    const line = rawLine.replace(/[ \t]+$/g, '');
-    const trimmed = line.trim();
-
-    if (/^(?:image|video|audio|voice|link|music|emoji|app):/i.test(trimmed)) {
-      out.push(line);
-      continue;
-    }
-
-    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
-    if (heading) {
-      const title = heading[2]!.trim();
-      if (out.length > 0 && out[out.length - 1] !== '') out.push('');
-      out.push(title);
-      out.push('');
-      continue;
-    }
-
-    const quote = trimmed.match(/^>\s?(.*)$/);
-    if (quote) {
-      out.push(quote[1]!.trim() ? `「${quote[1]!.trim()}」` : '');
-      continue;
-    }
-
-    const ul = trimmed.match(/^[-*+]\s+(.+)$/);
-    if (ul) {
-      out.push(`· ${ul[1]!.trim()}`);
-      continue;
-    }
-    const ol = trimmed.match(/^(\d+)[.)、]\s+(.+)$/);
-    if (ol) {
-      out.push(`${ol[1]}）${ol[2]!.trim()}`);
-      continue;
-    }
-
-    if (/^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(trimmed)) {
-      continue;
-    }
-    if (trimmed.includes('|') && /^\|?.+\|.+\|?$/.test(trimmed)) {
-      out.push(
-        trimmed
-          .replace(/^\|/, '')
-          .replace(/\|$/, '')
-          .split('|')
-          .map((c) => c.trim())
-          .filter(Boolean)
-          .join(' · '),
-      );
-      continue;
-    }
-
-    out.push(line);
-  }
-
-  return out.join('\n');
-}
-
-function looksStructured(text: string): boolean {
-  if (/^· /m.test(text) || /^\d+）/m.test(text)) return true;
-  if (/(^|\n)(#{1,6}\s|[-*+]\s|\d+[.)、]\s)/.test(text)) return true;
-  return false;
-}
-
-function looksLikeOutboundProtocol(text: string): boolean {
-  return /^(?:image|video|audio|voice|link|music|emoji|app):/im.test(text);
-}
-
-function attachOrphanEmojis(text: string): string {
-  return text.replace(
-    /([^\n])\n+(?:[ \t]*\n+)*([ \t]*[\p{Extended_Pictographic}\uFE0F\u200D]+[ \t]*)(?=\n|$)/gu,
-    '$1 $2',
-  );
-}
-
-function collapseCasualChat(text: string): string {
-  return text
-    .replace(/\s+/g, ' ')
-    .replace(/\s+([\p{Extended_Pictographic}\uFE0F\u200D]+)/gu, ' $1')
-    .trim();
-}
-
-function tidyLongAnswer(text: string): string {
-  let s = text
-    .replace(/[^\S\n]+/g, ' ')
-    .replace(/ *\n */g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-
-  s = attachOrphanEmojis(s);
-  s = s
-    .replace(/(· [^\n]+)\n\n(?=· )/g, '$1\n')
-    .replace(/(\d+）[^\n]+)\n\n(?=\d+）)/g, '$1\n');
-
-  return s.trim();
-}
-
 export function normalizeOutboundText(text: string): string {
   if (!text) return '';
-
-  let s = String(text);
-  s = stripCodeFences(s);
-  s = stripRejectedDraft(s);
-  s = convertMarkdownBlocks(s);
-  s = stripInlineMarkdown(s);
-  s = s.replace(/[\u2028\u2029\u0085]/g, '\n');
-
-  if (looksStructured(s) || looksLikeOutboundProtocol(s)) {
-    return tidyLongAnswer(s);
-  }
-  return collapseCasualChat(s);
+  return stripRejectedDraft(String(text).replace(/[\u2028\u2029\u0085]/g, '\n'));
 }

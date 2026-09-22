@@ -73,11 +73,16 @@ console.log('✓ inbound parse');
 }
 console.log('✓ map replies (http only)');
 
-assert.equal(normalizeOutboundText('**你好**'), '你好');
+assert.equal(normalizeOutboundText('**你好**'), '**你好**');
 assert.equal(
   normalizeOutboundText('画好了\nimage:https://cdn.example.com/a.jpg'),
   '画好了\nimage:https://cdn.example.com/a.jpg',
 );
+assert.equal(
+  normalizeOutboundText('喊她了\nat:wxid_abc|@火 发个老牛子的表情'),
+  '喊她了\nat:wxid_abc|@火 发个老牛子的表情',
+);
+assert.equal(normalizeOutboundText('吃了吗\n在吗'), '吃了吗\n在吗');
 assert.equal(
   normalizeOutboundText('<invoke name="emoji_get"><parameter name="md5">abc</parameter></invoke>'),
   '',
@@ -100,6 +105,7 @@ assert.equal(
 );
 assert.equal(normalizeOutboundText('NO_REPLY'), '');
 assert.equal(normalizeOutboundText('[ERROR] TypeError: x'), '');
+assert.equal(normalizeOutboundText('⚠️ Agent run failed (model: askdiandian/dots3-note-prev).'), '');
 assert.equal(normalizeOutboundText('voice-clip.silk'), '');
 assert.equal(looksLikeToolDraft('<invoke name="emoji_get"></invoke>'), true);
 assert.equal(looksLikeToolDraft('NO_REPLY'), false);

@@ -291,6 +291,7 @@ export async function dispatchXbotInbound(args: {
                 markOverflow(payload.text);
                 return;
               }
+              if (/agent run failed/i.test(String(payload.text || ''))) return;
               if (!shouldDeliver(payload, info)) return;
               const replies = mapOpenClawPayloadToReplies(payload);
               const overflowReply = replies.find(
