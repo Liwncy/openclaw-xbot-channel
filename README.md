@@ -1,5 +1,7 @@
 # openclaw-xbot-channel
 
+已迁到 [xbot-channel/openclaw](https://github.com/Liwncy/xbot-channel/tree/main/openclaw)。这里只留着，不再改。
+
 OpenClaw 只连 [xchatbot](https://github.com/lwc--/xchatbot)，不认微信 / Golem / 其它适配器。
 
 哪个适配器进的消息，由 xchatbot 带 `platform`；回复也只 POST 回 xchatbot，再由对应适配器发出去。
